@@ -1,0 +1,16 @@
+{
+  "name": "ariadeck",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@9.15.4",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "dev:mcp": "pnpm --filter @ariadeck/mcp-server dev",
+    "dev:desktop": "pnpm --filter @ariadeck/desktop dev"
+  }
+}
