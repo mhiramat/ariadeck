@@ -8,6 +8,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./sqlite": {
+      "types": "./dist/storage/SqliteStorageAdapter.d.ts",
+      "import": "./dist/storage/SqliteStorageAdapter.js"
     }
   },
   "scripts": {

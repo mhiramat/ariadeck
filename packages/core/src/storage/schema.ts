@@ -1,0 +1,103 @@
+/**
+ * Idempotent SQLite DDL statements matching DESIGN_SPEC.md.
+ * All Phase 1-4 tables and columns are created upfront to guarantee
+ * forward-compatible schema evolution across local and synced databases.
+ */
+export const SCHEMA_DDL_STATEMENTS: readonly string[] = [
+  `CREATE TABLE IF NOT EXISTS boards (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    updated_by_device_id TEXT NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1,
+    deleted_at TEXT
+  )`,
+  `CREATE TABLE IF NOT EXISTS cards (
+    id TEXT PRIMARY KEY,
+    board_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL DEFAULT '',
+    card_type TEXT NOT NULL DEFAULT 'idea',
+    status TEXT NOT NULL DEFAULT 'todo',
+    tags_json TEXT NOT NULL DEFAULT '[]',
+    pos_x REAL NOT NULL DEFAULT 0,
+    pos_y REAL NOT NULL DEFAULT 0,
+    timeline_order INTEGER,
+    start_at TEXT,
+    end_at TEXT,
+    split_from_card_id TEXT,
+    merged_from_card_ids_json TEXT,
+    replaced_by_card_ids_json TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    updated_by_device_id TEXT NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1,
+    deleted_at TEXT,
+    FOREIGN KEY (board_id) REFERENCES boards(id)
+  )`,
+  `CREATE TABLE IF NOT EXISTS edges (
+    id TEXT PRIMARY KEY,
+    board_id TEXT NOT NULL,
+    source_card_id TEXT NOT NULL,
+    target_card_id TEXT NOT NULL,
+    relation_type TEXT NOT NULL DEFAULT 'blocks',
+    label TEXT,
+    is_conflicted INTEGER NOT NULL DEFAULT 0,
+    conflict_reason TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    updated_by_device_id TEXT NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1,
+    deleted_at TEXT,
+    FOREIGN KEY (board_id) REFERENCES boards(id),
+    FOREIGN KEY (source_card_id) REFERENCES cards(id),
+    FOREIGN KEY (target_card_id) REFERENCES cards(id)
+  )`,
+  `CREATE TABLE IF NOT EXISTS card_attachments (
+    id TEXT PRIMARY KEY,
+    card_id TEXT NOT NULL,
+    board_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    local_uri TEXT NOT NULL,
+    remote_file_id TEXT,
+    mime_type TEXT NOT NULL,
+    file_size INTEGER NOT NULL DEFAULT 0,
+    duration_ms INTEGER,
+    transcript TEXT,
+    sync_status TEXT NOT NULL DEFAULT 'local_only',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    updated_by_device_id TEXT NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1,
+    deleted_at TEXT,
+    FOREIGN KEY (card_id) REFERENCES cards(id),
+    FOREIGN KEY (board_id) REFERENCES boards(id)
+  )`,
+  `CREATE TABLE IF NOT EXISTS sync_outbox (
+    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+    entity_type TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    board_id TEXT NOT NULL,
+    operation TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    synced_at TEXT
+  )`,
+  `CREATE TABLE IF NOT EXISTS conflicts (
+    id TEXT PRIMARY KEY,
+    board_id TEXT NOT NULL,
+    entity_type TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    conflict_type TEXT NOT NULL,
+    local_snapshot_json TEXT NOT NULL,
+    remote_snapshot_json TEXT NOT NULL,
+    resolved_at TEXT,
+    created_at TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_cards_board_id ON cards(board_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_edges_board_id ON edges(board_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_attachments_card_id ON card_attachments(card_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_sync_outbox_unsynced ON sync_outbox(board_id, synced_at)`,
+];
