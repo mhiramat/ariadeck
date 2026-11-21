@@ -1,7 +1,11 @@
 #!/usr/bin/env node
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { BoardGraphService } from '@ariadeck/core';
+import {
+  BoardGraphService,
+  BoardSyncEngine,
+  GoogleDriveSyncAdapter,
+} from '@ariadeck/core';
 import { SqliteStorageAdapter } from '@ariadeck/core/sqlite';
 import { createHttpApp } from './httpServer.js';
 import { createAriadeckMcpServer, MCP_DEVICE_ID } from './mcpServer.js';
@@ -18,7 +22,16 @@ async function main(): Promise<void> {
   const service = new BoardGraphService(storage, { deviceId: MCP_DEVICE_ID });
 
   if (httpMode) {
-    const app = createHttpApp(service);
+    const gdriveToken = process.env.ARIADECK_GDRIVE_ACCESS_TOKEN;
+    const syncEngine = gdriveToken
+      ? new BoardSyncEngine(
+          storage,
+          new GoogleDriveSyncAdapter({ getAccessToken: async () => gdriveToken }),
+          { deviceId: MCP_DEVICE_ID, eventBus: service.eventBus }
+        )
+      : undefined;
+
+    const app = createHttpApp(service, { syncEngine });
 
     // Expose stateless Streamable HTTP MCP transport alongside the REST + SSE bridge
     app.post('/mcp', async (req, res) => {

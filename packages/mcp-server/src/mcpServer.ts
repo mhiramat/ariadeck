@@ -536,6 +536,31 @@ export function createAriadeckMcpServer(service: BoardGraphService): McpServer {
     }
   );
 
+  server.registerTool(
+    'export_board_markdown',
+    {
+      description:
+        'Export an Ariadeck board into a single timeline-ordered Markdown document with YAML frontmatter, dependency links, and optional attachment transcripts.',
+      inputSchema: {
+        boardId: z.string().describe('ID of the Ariadeck board to export'),
+        includeTranscripts: z
+          .boolean()
+          .optional()
+          .describe('Include attachment transcripts as blockquotes (default: true)'),
+      },
+    },
+    async (args) => {
+      try {
+        const result = await service.exportBoardToMarkdown(args.boardId, {
+          includeTranscripts: args.includeTranscripts ?? true,
+        });
+        return toolSuccess(result);
+      } catch (error) {
+        return toolError(error);
+      }
+    }
+  );
+
   // ---------------------------------------------------------------------------
   // MCP Prompts (Reusable AI Workflows)
   // ---------------------------------------------------------------------------

@@ -1,7 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { BoardGraphService, InMemoryStorageAdapter } from '@ariadeck/core';
+import {
+  BoardGraphService,
+  BoardSyncEngine,
+  InMemoryRemoteSyncAdapter,
+  InMemoryStorageAdapter,
+} from '@ariadeck/core';
 import { createHttpApp } from '../httpServer.js';
 
 describe('HTTP REST & SSE Bridge', () => {
@@ -13,7 +18,11 @@ describe('HTTP REST & SSE Bridge', () => {
     const storage = new InMemoryStorageAdapter();
     await storage.initialize();
     service = new BoardGraphService(storage, { deviceId: 'ariadeck-test' });
-    const app = createHttpApp(service);
+    const syncEngine = new BoardSyncEngine(storage, new InMemoryRemoteSyncAdapter(), {
+      deviceId: 'ariadeck-test',
+      eventBus: service.eventBus,
+    });
+    const app = createHttpApp(service, { syncEngine });
     server = await new Promise<Server>((resolve) => {
       const s = app.listen(0, '127.0.0.1', () => resolve(s));
     });
@@ -109,6 +118,20 @@ describe('HTTP REST & SSE Bridge', () => {
     };
     expect(timeline.steps.map((s) => s.step)).toEqual([0, 1, 2]);
     expect(timeline.violations).toEqual([]);
+
+    // Export board as Markdown via REST
+    const exportRes = await fetch(`${baseUrl}/api/boards/${board.id}/export/markdown`);
+    expect(exportRes.status).toBe(200);
+    const exported = (await exportRes.json()) as { filename: string; markdown: string };
+    expect(exported.filename).toBe('ariadeck-demo-board.md');
+    expect(exported.markdown).toContain('## [Step 1] Sub 1');
+
+    // Sync board & query conflicts via REST
+    const syncRes = await fetch(`${baseUrl}/api/boards/${board.id}/sync`, { method: 'POST' });
+    expect(syncRes.status).toBe(200);
+    const conflictsRes = await fetch(`${baseUrl}/api/boards/${board.id}/conflicts`);
+    expect(conflictsRes.status).toBe(200);
+    expect(await conflictsRes.json()).toMatchObject({ conflicts: [], syncConfigured: true });
   });
 
   it('broadcasts GraphEventBus updates over SSE /api/events', async () => {

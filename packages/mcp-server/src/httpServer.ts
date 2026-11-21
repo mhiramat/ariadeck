@@ -3,11 +3,17 @@ import cors from 'cors';
 import {
   AriadeckError,
   BoardGraphService,
+  BoardSyncEngine,
   CyclicDependencyError,
   NotFoundError,
   ValidationError,
+  type ConflictResolutionAction,
   type MutationContext,
 } from '@ariadeck/core';
+
+export interface HttpAppOptions {
+  syncEngine?: BoardSyncEngine;
+}
 
 export const MCP_SERVER_NAME = 'ariadeck-mcp';
 export const MCP_SERVER_VERSION = '0.1.0';
@@ -57,7 +63,11 @@ function asyncHandler(
  * Creates the Express HTTP application exposing Ariadeck's REST API
  * and Server-Sent Events (/api/events) real-time synchronization bridge.
  */
-export function createHttpApp(service: BoardGraphService): Express {
+export function createHttpApp(
+  service: BoardGraphService,
+  options: HttpAppOptions = {}
+): Express {
+  const { syncEngine } = options;
   const app = express();
   app.use(cors());
   app.use(express.json());
@@ -157,6 +167,78 @@ export function createHttpApp(service: BoardGraphService): Express {
         paramId(req),
         getMutationContext(req)
       );
+      res.json(result);
+    })
+  );
+
+  app.get(
+    '/api/boards/:id/export/markdown',
+    asyncHandler(async (req, res) => {
+      const includeTranscripts = req.query.includeTranscripts !== 'false';
+      const result = await service.exportBoardToMarkdown(paramId(req), {
+        includeTranscripts,
+      });
+      if (req.query.raw === 'true') {
+        res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
+        res.setHeader(
+          'Content-Disposition',
+          `attachment; filename="${result.filename}"`
+        );
+        res.send(result.markdown);
+        return;
+      }
+      res.json(result);
+    })
+  );
+
+  app.get(
+    '/api/boards/:id/conflicts',
+    asyncHandler(async (req, res) => {
+      if (!syncEngine) {
+        res.json({ conflicts: [], syncConfigured: false });
+        return;
+      }
+      const conflicts = await syncEngine.listConflicts(paramId(req), false);
+      res.json({ conflicts, syncConfigured: true });
+    })
+  );
+
+  app.post(
+    '/api/boards/:id/conflicts/:conflictId/resolve',
+    asyncHandler(async (req, res) => {
+      if (!syncEngine) {
+        res.status(501).json({
+          error: {
+            code: 'SYNC_NOT_CONFIGURED',
+            message: 'Sync engine is not configured on this server.',
+          },
+        });
+        return;
+      }
+      const action = req.body as ConflictResolutionAction;
+      const resolved = await syncEngine.resolveConflict(
+        paramId(req, 'id'),
+        paramId(req, 'conflictId'),
+        action
+      );
+      res.json({ conflict: resolved });
+    })
+  );
+
+  app.post(
+    '/api/boards/:id/sync',
+    asyncHandler(async (req, res) => {
+      if (!syncEngine) {
+        res.status(501).json({
+          error: {
+            code: 'SYNC_NOT_CONFIGURED',
+            message:
+              'Google Drive sync is not configured. Set ARIADECK_GDRIVE_ACCESS_TOKEN to enable remote sync.',
+          },
+        });
+        return;
+      }
+      const result = await syncEngine.syncBoard(paramId(req));
       res.json(result);
     })
   );

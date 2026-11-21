@@ -79,6 +79,11 @@ Replace an existing edge `sourceCardId -> targetCardId` with `sourceCardId -> ne
 Run Kahn's topological sort with longest-path layering and persist `timelineOrder` on every active card.
 - `boardId` (string, required)
 
+### `export_board_markdown`
+Export an Ariadeck board into a single timeline-ordered Markdown document (`ariadeck-{board_slug}.md`) with YAML frontmatter and dependency links.
+- `boardId` (string, required)
+- `includeTranscripts` (boolean, optional, default `true`)
+
 ## Prompts
 
 - `analyze_and_split_complex_cards(board_id)`

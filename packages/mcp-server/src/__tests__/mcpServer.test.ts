@@ -174,6 +174,15 @@ describe('Ariadeck MCP Server (Resources, Tools, Prompts)', () => {
     };
     expect(timeline.steps.map((s) => s.step)).toEqual([0, 1, 2]);
     expect(timeline.violations).toEqual([]);
+
+    // Export board to Markdown via MCP tool
+    const mdRes = await client.callTool({
+      name: 'export_board_markdown',
+      arguments: { boardId: board.id },
+    });
+    const mdPayload = parseToolText(mdRes) as { filename: string; markdown: string };
+    expect(mdPayload.filename).toBe('ariadeck-engineering-plan.md');
+    expect(mdPayload.markdown).toContain('generator: Ariadeck');
   });
 
   it('registers all three workflow prompts', async () => {
