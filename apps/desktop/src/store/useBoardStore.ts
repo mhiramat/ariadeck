@@ -1,0 +1,288 @@
+import { create } from 'zustand';
+import type {
+  Board,
+  BoardGraph,
+  Card,
+  CardStatus,
+  CardType,
+  GraphEvent,
+  RelationType,
+  SplitSubCardInput,
+} from '@ariadeck/core';
+import { createAriadeckApiClient, type AriadeckApiClient } from '../api/client.ts';
+
+export type DesktopViewMode = 'graph' | 'timeline';
+export type ConnectionStatus = 'connecting' | 'connected' | 'disconnected';
+
+export interface ToastNotification {
+  id: string;
+  kind: 'info' | 'error' | 'success';
+  message: string;
+}
+
+export interface BoardStoreState {
+  boards: Board[];
+  activeBoardId: string | null;
+  graph: BoardGraph | null;
+  selectedCardId: string | null;
+  viewMode: DesktopViewMode;
+  connectionStatus: ConnectionStatus;
+  loading: boolean;
+  toasts: ToastNotification[];
+
+  initialize: () => Promise<void>;
+  selectBoard: (boardId: string) => Promise<void>;
+  createBoard: (title: string, description?: string) => Promise<Board | null>;
+  refreshActiveBoard: () => Promise<void>;
+
+  selectCard: (cardId: string | null) => void;
+  setViewMode: (mode: DesktopViewMode) => void;
+
+  createCard: (input: {
+    title: string;
+    content?: string;
+    cardType?: CardType;
+    posX?: number;
+    posY?: number;
+  }) => Promise<Card | null>;
+  updateCard: (
+    cardId: string,
+    patch: {
+      title?: string;
+      content?: string;
+      cardType?: CardType;
+      status?: CardStatus;
+      tags?: string[];
+      posX?: number;
+      posY?: number;
+    }
+  ) => Promise<void>;
+  deleteCard: (cardId: string) => Promise<void>;
+  connectCards: (
+    sourceCardId: string,
+    targetCardId: string,
+    relationType?: RelationType
+  ) => Promise<void>;
+  disconnectCards: (edgeId: string) => Promise<void>;
+  splitCard: (
+    cardId: string,
+    subCards: SplitSubCardInput[],
+    linkMode: 'sequential' | 'parallel'
+  ) => Promise<void>;
+
+  startEventStream: () => () => void;
+  pushToast: (kind: ToastNotification['kind'], message: string) => void;
+  dismissToast: (id: string) => void;
+}
+
+export function createBoardStore(api: AriadeckApiClient = createAriadeckApiClient()) {
+  let toastSeq = 1;
+
+  return create<BoardStoreState>((set, get) => ({
+    boards: [],
+    activeBoardId: null,
+    graph: null,
+    selectedCardId: null,
+    viewMode: 'graph',
+    connectionStatus: 'connecting',
+    loading: false,
+    toasts: [],
+
+    pushToast: (kind, message) => {
+      const id = `toast-${toastSeq++}`;
+      set((state) => ({
+        toasts: [...state.toasts.slice(-4), { id, kind, message }],
+      }));
+    },
+
+    dismissToast: (id) => {
+      set((state) => ({
+        toasts: state.toasts.filter((t) => t.id !== id),
+      }));
+    },
+
+    initialize: async () => {
+      set({ loading: true });
+      try {
+        let boards = await api.listBoards();
+        if (boards.length === 0) {
+          const defaultBoard = await api.createBoard({
+            title: 'My First Board',
+            description: 'Double-click the canvas to add cards and connect dependencies.',
+          });
+          boards = [defaultBoard];
+        }
+        const firstBoardId = boards[0]!.id;
+        const graph = await api.getBoardGraph(firstBoardId);
+        set({
+          boards,
+          activeBoardId: firstBoardId,
+          graph,
+          loading: false,
+          connectionStatus: 'connected',
+        });
+      } catch (error) {
+        set({ loading: false, connectionStatus: 'disconnected' });
+        get().pushToast(
+          'error',
+          error instanceof Error ? error.message : 'Failed to connect to Ariadeck server.'
+        );
+      }
+    },
+
+    selectBoard: async (boardId) => {
+      set({ loading: true, selectedCardId: null });
+      try {
+        const graph = await api.getBoardGraph(boardId);
+        set({ activeBoardId: boardId, graph, loading: false });
+      } catch (error) {
+        set({ loading: false });
+        get().pushToast(
+          'error',
+          error instanceof Error ? error.message : 'Failed to load board.'
+        );
+      }
+    },
+
+    createBoard: async (title, description = '') => {
+      try {
+        const board = await api.createBoard({ title, description });
+        const boards = await api.listBoards();
+        const graph = await api.getBoardGraph(board.id);
+        set({ boards, activeBoardId: board.id, graph, selectedCardId: null });
+        get().pushToast('success', `Created board "${board.title}".`);
+        return board;
+      } catch (error) {
+        get().pushToast(
+          'error',
+          error instanceof Error ? error.message : 'Failed to create board.'
+        );
+        return null;
+      }
+    },
+
+    refreshActiveBoard: async () => {
+      const { activeBoardId, selectedCardId } = get();
+      try {
+        const boards = await api.listBoards();
+        if (!activeBoardId) {
+          set({ boards });
+          return;
+        }
+        const graph = await api.getBoardGraph(activeBoardId);
+        const stillExists =
+          selectedCardId !== null && graph.cards.some((c) => c.id === selectedCardId);
+        set({
+          boards,
+          graph,
+          selectedCardId: stillExists ? selectedCardId : null,
+        });
+      } catch {
+        // Ignore transient refresh failures.
+      }
+    },
+
+    selectCard: (cardId) => set({ selectedCardId: cardId }),
+
+    setViewMode: (mode) => set({ viewMode: mode }),
+
+    createCard: async (input) => {
+      const boardId = get().activeBoardId;
+      if (!boardId) return null;
+      try {
+        const card = await api.createCard({ boardId, ...input });
+        await get().refreshActiveBoard();
+        set({ selectedCardId: card.id });
+        return card;
+      } catch (error) {
+        get().pushToast(
+          'error',
+          error instanceof Error ? error.message : 'Failed to create card.'
+        );
+        return null;
+      }
+    },
+
+    updateCard: async (cardId, patch) => {
+      try {
+        await api.updateCard(cardId, patch);
+        await get().refreshActiveBoard();
+      } catch (error) {
+        get().pushToast(
+          'error',
+          error instanceof Error ? error.message : 'Failed to update card.'
+        );
+      }
+    },
+
+    deleteCard: async (cardId) => {
+      try {
+        await api.deleteCard(cardId);
+        set((state) => ({
+          selectedCardId: state.selectedCardId === cardId ? null : state.selectedCardId,
+        }));
+        await get().refreshActiveBoard();
+      } catch (error) {
+        get().pushToast(
+          'error',
+          error instanceof Error ? error.message : 'Failed to delete card.'
+        );
+      }
+    },
+
+    connectCards: async (sourceCardId, targetCardId, relationType = 'blocks') => {
+      const boardId = get().activeBoardId;
+      if (!boardId) return;
+      try {
+        await api.connectCards({ boardId, sourceCardId, targetCardId, relationType });
+        await get().refreshActiveBoard();
+      } catch (error) {
+        get().pushToast(
+          'error',
+          error instanceof Error ? error.message : 'Failed to connect cards.'
+        );
+      }
+    },
+
+    disconnectCards: async (edgeId) => {
+      try {
+        await api.disconnectCards(edgeId);
+        await get().refreshActiveBoard();
+      } catch (error) {
+        get().pushToast(
+          'error',
+          error instanceof Error ? error.message : 'Failed to remove edge.'
+        );
+      }
+    },
+
+    splitCard: async (cardId, subCards, linkMode) => {
+      try {
+        await api.splitCard(cardId, { subCards, linkMode });
+        set({ selectedCardId: null });
+        await get().refreshActiveBoard();
+        get().pushToast('success', `Split card into ${subCards.length} child cards.`);
+      } catch (error) {
+        get().pushToast(
+          'error',
+          error instanceof Error ? error.message : 'Failed to split card.'
+        );
+      }
+    },
+
+    startEventStream: () => {
+      return api.subscribeEvents({
+        onConnected: () => set({ connectionStatus: 'connected' }),
+        onError: () => set({ connectionStatus: 'disconnected' }),
+        onEvent: (event: GraphEvent) => {
+          void get().refreshActiveBoard();
+          if (event.deviceId === 'ariadeck-mcp-server') {
+            get().pushToast('info', `AI agent updated the board (${event.type}).`);
+          }
+        },
+      });
+    },
+  }));
+}
+
+export const useBoardStore = createBoardStore();
