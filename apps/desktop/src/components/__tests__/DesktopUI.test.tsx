@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import type { Board, BoardGraph, Card } from '@ariadeck/core';
 import { useBoardStore } from '../../store/useBoardStore.ts';
 import { AppHeader } from '../AppHeader.tsx';
+import { AutoDismissToast } from '../DesktopAppShell.tsx';
 import { InspectorPanel } from '../InspectorPanel.tsx';
 
 const NOW = '2026-01-01T00:00:00.000Z';
@@ -73,12 +74,13 @@ describe('Desktop UI Components', () => {
     fireEvent.click(timelineTab);
     expect(useBoardStore.getState().viewMode).toBe('timeline');
 
-    // Toggle board list sidebar
-    fireEvent.click(screen.getByRole('button', { name: /Boards/i }));
+    // Open Ariadeck brand menu and toggle board list sidebar
+    fireEvent.click(screen.getByRole('button', { name: /Ariadeck/i }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /Boards/i }));
     expect(useBoardStore.getState().boardListOpen).toBe(true);
   });
 
-  it('triggers Markdown export from AppHeader', () => {
+  it('triggers Markdown export from the Ariadeck brand menu', () => {
     const exportSpy = vi.fn().mockResolvedValue({
       filename: 'ariadeck-story-arc.md',
       markdown: '# Story Arc',
@@ -87,8 +89,29 @@ describe('Desktop UI Components', () => {
 
     render(<AppHeader />);
 
-    fireEvent.click(screen.getByRole('button', { name: /Export MD/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Ariadeck/i }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /Export MD/i }));
     expect(exportSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('auto-dismisses toast notifications after 5 seconds', () => {
+    vi.useFakeTimers();
+    const dismissSpy = vi.fn();
+
+    render(
+      <AutoDismissToast
+        toast={{ id: 't1', kind: 'success', message: 'Saved successfully' }}
+        onDismiss={dismissSpy}
+      />
+    );
+
+    expect(screen.getByText('Saved successfully')).toBeInTheDocument();
+    vi.advanceTimersByTime(4999);
+    expect(dismissSpy).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(1);
+    expect(dismissSpy).toHaveBeenCalledWith('t1');
+    vi.useRealTimers();
   });
 
   it('renames the active board inline from AppHeader', async () => {
