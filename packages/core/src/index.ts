@@ -5,4 +5,5 @@ export * from './events/GraphEventBus.js';
 export * from './storage/schema.js';
 export * from './storage/StorageAdapter.js';
 export * from './storage/InMemoryStorageAdapter.js';
+export * from './timeline/timelineLayout.js';
 export * from './service/BoardGraphService.js';

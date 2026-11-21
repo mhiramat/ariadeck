@@ -1,6 +1,11 @@
 import { CyclicDependencyError, NotFoundError, ValidationError } from '../errors.js';
 import { GraphEventBus, type GraphEventType } from '../events/GraphEventBus.js';
 import type { StorageAdapter } from '../storage/StorageAdapter.js';
+import {
+  computeTopologicalSteps,
+  detectTimelineViolations,
+  groupCardsByTimelineStep,
+} from '../timeline/timelineLayout.js';
 import type {
   Board,
   BoardGraph,
@@ -16,6 +21,7 @@ import type {
   SplitCardResult,
   SyncOutboxEntityType,
   SyncOutboxOperation,
+  TimelineSortResult,
   UpdateBoardInput,
   UpdateCardInput,
 } from '../types/models.js';
@@ -966,6 +972,58 @@ export class BoardGraphService {
 
     this.emitEvent('card:created', boardId, [intermediate.id], deviceId, timestamp);
     return intermediate;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Timeline Auto-Sorting (Phase 2)
+  // ---------------------------------------------------------------------------
+
+  async computeTimelineLayout(
+    boardId: string,
+    ctx?: MutationContext
+  ): Promise<TimelineSortResult> {
+    await this.getBoard(boardId);
+    const [cards, edges] = await Promise.all([
+      this.storage.listCardsByBoard(boardId, false),
+      this.storage.listEdgesByBoard(boardId, false),
+    ]);
+
+    const stepMap = computeTopologicalSteps(cards, edges);
+    const timestamp = this.now();
+    const deviceId = this.resolveDeviceId(ctx);
+    const updatedCards: Card[] = [];
+    const changedCardIds: string[] = [];
+
+    await this.storage.runInTransaction(async () => {
+      for (const card of cards) {
+        const computedStep = stepMap.get(card.id) ?? 0;
+        if (card.timelineOrder !== computedStep) {
+          const updated: Card = {
+            ...card,
+            timelineOrder: computedStep,
+            updatedAt: timestamp,
+            updatedByDeviceId: deviceId,
+            version: card.version + 1,
+          };
+          await this.storage.saveCard(updated);
+          await this.recordOutbox('card', updated.id, boardId, 'update', updated, timestamp);
+          updatedCards.push(updated);
+          changedCardIds.push(updated.id);
+        } else {
+          updatedCards.push(card);
+        }
+      }
+    });
+
+    if (changedCardIds.length > 0) {
+      this.emitEvent('board:updated', boardId, changedCardIds, deviceId, timestamp);
+    }
+
+    return {
+      boardId,
+      steps: groupCardsByTimelineStep(updatedCards),
+      violations: detectTimelineViolations(updatedCards, edges),
+    };
   }
 
   // ---------------------------------------------------------------------------

@@ -221,3 +221,33 @@ export interface InsertIntermediateCardInput {
   status?: CardStatus;
   tags?: string[];
 }
+
+/**
+ * Represents a single column (layer) in the computed timeline layout.
+ */
+export interface TimelineStepGroup {
+  step: number;
+  cards: Card[];
+}
+
+/**
+ * Represents a dependency ordering violation where a dependent card is placed
+ * at or before its prerequisite card in the timeline.
+ */
+export interface TimelineViolation {
+  edgeId: string;
+  sourceCardId: string;
+  targetCardId: string;
+  sourceStep: number;
+  targetStep: number;
+  reason: string;
+}
+
+/**
+ * Result returned by BoardGraphService.computeTimelineLayout.
+ */
+export interface TimelineSortResult {
+  boardId: string;
+  steps: TimelineStepGroup[];
+  violations: TimelineViolation[];
+}
