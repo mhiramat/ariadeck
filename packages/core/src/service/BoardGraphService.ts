@@ -11,6 +11,13 @@ import {
   type MarkdownExportOptions,
   type MarkdownExportResult,
 } from '../export/markdownExport.js';
+import {
+  parseAndValidateBoardJson,
+  renderBoardGraphToJson,
+  type BoardJsonExport,
+  type ImportBoardOptions,
+  type JsonExportResult,
+} from '../export/jsonExportImport.js';
 import type {
   Board,
   BoardGraph,
@@ -1046,6 +1053,145 @@ export class BoardGraphService {
       exportedAt: this.now(),
       ...options,
     });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Structured JSON Board Export & Import
+  // ---------------------------------------------------------------------------
+
+  async exportBoardToJson(boardId: string): Promise<JsonExportResult> {
+    const graph = await this.getBoardGraph(boardId);
+    return renderBoardGraphToJson(graph, this.now());
+  }
+
+  /**
+   * Validates and imports a versioned ariadeck-board v1 JSON payload as a new
+   * board with freshly remapped UUIDs inside a single atomic transaction.
+   */
+  async importBoardFromJson(
+    input: string | BoardJsonExport | unknown,
+    options: ImportBoardOptions = {},
+    ctx?: MutationContext
+  ): Promise<BoardGraph> {
+    const validated = parseAndValidateBoardJson(input);
+    const title = (options.titleOverride ?? validated.board.title).trim();
+    if (!title) {
+      throw new ValidationError('Imported board title must not be empty.');
+    }
+
+    const timestamp = this.now();
+    const deviceId = this.resolveDeviceId(ctx);
+    const newBoardId = this.generateId();
+
+    const board: Board = {
+      id: newBoardId,
+      title,
+      description: validated.board.description,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      updatedByDeviceId: deviceId,
+      version: 1,
+      deletedAt: null,
+    };
+
+    const cardIdMap = new Map<string, string>();
+    const createdCards: Card[] = validated.cards.map((src) => {
+      const newCardId = this.generateId();
+      cardIdMap.set(src.id, newCardId);
+      return {
+        id: newCardId,
+        boardId: newBoardId,
+        title: src.title,
+        content: src.content,
+        cardType: src.cardType,
+        status: src.status,
+        tags: [...src.tags],
+        posX: src.posX,
+        posY: src.posY,
+        timelineOrder: src.timelineOrder,
+        startAt: src.startAt,
+        endAt: src.endAt,
+        splitFromCardId: null,
+        mergedFromCardIds: null,
+        replacedByCardIds: null,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        updatedByDeviceId: deviceId,
+        version: 1,
+        deletedAt: null,
+      };
+    });
+
+    const createdEdges: Edge[] = validated.edges.map((src) => ({
+      id: this.generateId(),
+      boardId: newBoardId,
+      sourceCardId: cardIdMap.get(src.sourceCardId)!,
+      targetCardId: cardIdMap.get(src.targetCardId)!,
+      relationType: src.relationType,
+      ...(src.label !== undefined ? { label: src.label } : {}),
+      isConflicted: false,
+      conflictReason: null,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      updatedByDeviceId: deviceId,
+      version: 1,
+      deletedAt: null,
+    }));
+
+    const createdAttachments: CardAttachment[] = validated.attachments.map((src) => ({
+      id: this.generateId(),
+      cardId: cardIdMap.get(src.cardId)!,
+      boardId: newBoardId,
+      kind: src.kind,
+      localUri: src.localUri,
+      remoteFileId: null,
+      mimeType: src.mimeType,
+      fileSize: src.fileSize,
+      durationMs: src.durationMs,
+      transcript: src.transcript,
+      syncStatus: 'local_only',
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      updatedByDeviceId: deviceId,
+      version: 1,
+      deletedAt: null,
+    }));
+
+    await this.storage.runInTransaction(async () => {
+      await this.storage.saveBoard(board);
+      await this.recordOutbox('board', board.id, board.id, 'create', board, timestamp);
+
+      for (const card of createdCards) {
+        await this.storage.saveCard(card);
+        await this.recordOutbox('card', card.id, board.id, 'create', card, timestamp);
+      }
+
+      for (const edge of createdEdges) {
+        await this.storage.saveEdge(edge);
+        await this.recordOutbox('edge', edge.id, board.id, 'create', edge, timestamp);
+      }
+
+      for (const attachment of createdAttachments) {
+        await this.storage.saveAttachment(attachment);
+        await this.recordOutbox(
+          'attachment',
+          attachment.id,
+          board.id,
+          'create',
+          attachment,
+          timestamp
+        );
+      }
+    });
+
+    this.emitEvent('board:created', board.id, [board.id], deviceId, timestamp);
+
+    return {
+      board,
+      cards: createdCards,
+      edges: createdEdges,
+      attachments: createdAttachments,
+    };
   }
 
   // ---------------------------------------------------------------------------
