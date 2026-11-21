@@ -118,6 +118,14 @@ Configure an MCP-compatible AI client (such as Antigravity or Claude Desktop) fr
   - `find_and_merge_duplicates`
   - `check_plot_or_task_gaps`
 
+### 3. Cross-LLM Agent Skill (`.agents/skills/ariadeck-mcp`)
+
+Ariadeck includes a portable Agent Skill at [`.agents/skills/ariadeck-mcp/SKILL.md`](.agents/skills/ariadeck-mcp/SKILL.md) that teaches LLM agents how to inspect boards, preserve DAG invariants, apply atomic splits/merges, fill dependency gaps, and sort timelines via `ariadeck-mcp`.
+
+- **Antigravity, Gemini CLI, and OpenAI Codex CLI**: Automatically discover `.agents/skills/ariadeck-mcp/`.
+- **Claude Code / Cursor**: Copy or symlink `.agents/skills/ariadeck-mcp` into `.claude/skills/ariadeck-mcp` (or `.cursor/skills/ariadeck-mcp`).
+- See [Client Setup Guide](.agents/skills/ariadeck-mcp/references/client-setup.md) for client-specific MCP configuration snippets.
+
 ## Development & Testing
 
 Run typechecking, production builds, and the full Vitest test suite across all workspace packages:
