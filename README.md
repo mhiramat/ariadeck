@@ -88,7 +88,25 @@ The `ariadeck-mcp` CLI supports two transport modes:
 | `ARIADECK_DB_PATH` | `./ariadeck.db` | Relative or custom path to the local SQLite database file. |
 | `ARIADECK_PORT` | `3456` | Port for the HTTP / SSE / Streamable HTTP MCP server. |
 | `ARIADECK_HTTP` | `false` | Set to `true` to start in HTTP mode without passing `--http`. |
+| `ARIADECK_ALLOW_REMOTE` | `false` | Set to `true` (or pass `--allow-remote`) to bind beyond `127.0.0.1` for LAN/remote access. |
+| `ARIADECK_HOST` | `0.0.0.0` (with `--allow-remote`) | Bind address when remote access is explicitly enabled (otherwise locked to `127.0.0.1`). |
+| `ARIADECK_AUTH_TOKEN` | _(auto-generated in remote mode)_ | Access token required for browser login (`HttpOnly` session cookie) and HTTP `/mcp` Bearer authentication. |
+| `ARIADECK_CORS_ORIGINS` | _(loopback only)_ | Comma-separated extra allowed browser origins when accessing remotely (e.g. `http://192.168.1.10:5173`). |
 | `ARIADECK_GDRIVE_ACCESS_TOKEN` | _(unset)_ | Optional Google Drive OAuth bearer token enabling remote sync under `Ariadeck/`. |
+
+#### Security & Remote Access
+
+By default, `@ariadeck/mcp-server --http` binds strictly to `127.0.0.1` so other devices on the network cannot reach your local database. To enable remote/LAN access safely:
+
+```bash
+ARIADECK_AUTH_TOKEN="your-strong-passphrase" \
+ARIADECK_CORS_ORIGINS="http://<host-ip>:5173" \
+pnpm --filter @ariadeck/mcp-server exec tsx src/cli.ts --http --allow-remote
+```
+
+- If `ARIADECK_AUTH_TOKEN` is omitted with `--allow-remote`, the server automatically generates and prints a 256-bit random access token on startup so remote mode never runs unauthenticated.
+- Browsers sign in once via the **Unlock Workspace** screen (which issues an `HttpOnly; SameSite=Strict` session cookie for both REST and SSE).
+- External HTTP MCP clients authenticate via `Authorization: Bearer <token>`.
 
 #### Example MCP Client Configuration
 
