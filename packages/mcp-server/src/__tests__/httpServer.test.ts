@@ -97,6 +97,18 @@ describe('HTTP REST & SSE Bridge', () => {
     const graph = (await graphRes.json()) as { cards: unknown[]; edges: unknown[] };
     expect(graph.cards).toHaveLength(3);
     expect(graph.edges).toHaveLength(2);
+
+    // Compute timeline layout via REST
+    const timelineRes = await fetch(`${baseUrl}/api/boards/${board.id}/timeline/compute`, {
+      method: 'POST',
+    });
+    expect(timelineRes.status).toBe(200);
+    const timeline = (await timelineRes.json()) as {
+      steps: Array<{ step: number; cards: unknown[] }>;
+      violations: unknown[];
+    };
+    expect(timeline.steps.map((s) => s.step)).toEqual([0, 1, 2]);
+    expect(timeline.violations).toEqual([]);
   });
 
   it('broadcasts GraphEventBus updates over SSE /api/events', async () => {

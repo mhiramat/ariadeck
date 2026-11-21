@@ -465,6 +465,25 @@ export function createAriadeckMcpServer(service: BoardGraphService): McpServer {
     }
   );
 
+  server.registerTool(
+    'compute_timeline_layout',
+    {
+      description:
+        'Compute topological timeline step indices for all cards on an Ariadeck board using longest-path layering and persist each card timelineOrder.',
+      inputSchema: {
+        boardId: z.string().describe('ID of the Ariadeck board to sort'),
+      },
+    },
+    async (args) => {
+      try {
+        const result = await service.computeTimelineLayout(args.boardId, MCP_MUTATION_CTX);
+        return toolSuccess(result);
+      } catch (error) {
+        return toolError(error);
+      }
+    }
+  );
+
   // ---------------------------------------------------------------------------
   // MCP Prompts (Reusable AI Workflows)
   // ---------------------------------------------------------------------------

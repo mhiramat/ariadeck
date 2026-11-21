@@ -150,6 +150,17 @@ export function createHttpApp(service: BoardGraphService): Express {
     })
   );
 
+  app.post(
+    '/api/boards/:id/timeline/compute',
+    asyncHandler(async (req, res) => {
+      const result = await service.computeTimelineLayout(
+        paramId(req),
+        getMutationContext(req)
+      );
+      res.json(result);
+    })
+  );
+
   // Cards
   app.post(
     '/api/cards',
@@ -168,6 +179,9 @@ export function createHttpApp(service: BoardGraphService): Express {
           tags: body.tags,
           posX: body.posX,
           posY: body.posY,
+          timelineOrder: body.timelineOrder,
+          startAt: body.startAt,
+          endAt: body.endAt,
         },
         getMutationContext(req)
       );

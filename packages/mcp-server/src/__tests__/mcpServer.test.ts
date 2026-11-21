@@ -150,6 +150,18 @@ describe('Ariadeck MCP Server (Resources, Tools, Prompts)', () => {
     const mergedCard = parseToolText(mergeRes) as Card;
     expect(mergedCard.mergedFromCardIds).toEqual(splitData.createdCardIds);
     expect(mergedCard.updatedByDeviceId).toBe(MCP_DEVICE_ID);
+
+    // Compute topological timeline layout via MCP tool
+    const timelineRes = await client.callTool({
+      name: 'compute_timeline_layout',
+      arguments: { boardId: board.id },
+    });
+    const timeline = parseToolText(timelineRes) as {
+      steps: Array<{ step: number; cards: Card[] }>;
+      violations: unknown[];
+    };
+    expect(timeline.steps.map((s) => s.step)).toEqual([0, 1, 2]);
+    expect(timeline.violations).toEqual([]);
   });
 
   it('registers all three workflow prompts', async () => {
