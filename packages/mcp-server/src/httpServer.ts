@@ -1,0 +1,300 @@
+import express, { type Express, type Request, type Response, type NextFunction } from 'express';
+import cors from 'cors';
+import {
+  AriadeckError,
+  BoardGraphService,
+  CyclicDependencyError,
+  NotFoundError,
+  ValidationError,
+  type MutationContext,
+} from '@ariadeck/core';
+
+export const MCP_SERVER_NAME = 'ariadeck-mcp';
+export const MCP_SERVER_VERSION = '0.1.0';
+
+function getMutationContext(req: Request): MutationContext {
+  const headerDevice = req.header('x-ariadeck-device-id');
+  return {
+    deviceId: headerDevice && headerDevice.trim() ? headerDevice.trim() : 'ariadeck-http-client',
+  };
+}
+
+function paramId(req: Request, key = 'id'): string {
+  const value = req.params[key];
+  return Array.isArray(value) ? (value[0] ?? '') : (value ?? '');
+}
+
+function sendDomainError(res: Response, error: unknown): void {
+  if (error instanceof CyclicDependencyError) {
+    res.status(409).json({ error: { code: error.code, message: error.message } });
+    return;
+  }
+  if (error instanceof NotFoundError) {
+    res.status(404).json({ error: { code: error.code, message: error.message } });
+    return;
+  }
+  if (error instanceof ValidationError) {
+    res.status(400).json({ error: { code: error.code, message: error.message } });
+    return;
+  }
+  if (error instanceof AriadeckError) {
+    res.status(400).json({ error: { code: error.code, message: error.message } });
+    return;
+  }
+  const message = error instanceof Error ? error.message : 'Internal server error';
+  res.status(500).json({ error: { code: 'INTERNAL_ERROR', message } });
+}
+
+function asyncHandler(
+  fn: (req: Request, res: Response, next: NextFunction) => Promise<void>
+) {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    void fn(req, res, next).catch((err) => sendDomainError(res, err));
+  };
+}
+
+/**
+ * Creates the Express HTTP application exposing Ariadeck's REST API
+ * and Server-Sent Events (/api/events) real-time synchronization bridge.
+ */
+export function createHttpApp(service: BoardGraphService): Express {
+  const app = express();
+  app.use(cors());
+  app.use(express.json());
+
+  app.get('/api/health', (_req, res) => {
+    res.json({
+      status: 'ok',
+      service: MCP_SERVER_NAME,
+      version: MCP_SERVER_VERSION,
+    });
+  });
+
+  // SSE event stream for real-time desktop UI updates
+  app.get('/api/events', (req, res) => {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders?.();
+
+    res.write(`event: connected\ndata: ${JSON.stringify({ status: 'connected' })}\n\n`);
+
+    const unsubscribe = service.eventBus.subscribe((event) => {
+      res.write(`event: graph\ndata: ${JSON.stringify(event)}\n\n`);
+    });
+
+    const keepAliveTimer = setInterval(() => {
+      res.write(': keep-alive\n\n');
+    }, 25000);
+
+    req.on('close', () => {
+      clearInterval(keepAliveTimer);
+      unsubscribe();
+      res.end();
+    });
+  });
+
+  // Boards
+  app.get(
+    '/api/boards',
+    asyncHandler(async (_req, res) => {
+      const boards = await service.listBoards();
+      res.json({ boards });
+    })
+  );
+
+  app.post(
+    '/api/boards',
+    asyncHandler(async (req, res) => {
+      const { title, description } = req.body ?? {};
+      if (typeof title !== 'string') {
+        throw new ValidationError('Field "title" is required and must be a string.');
+      }
+      const board = await service.createBoard(
+        { title, description: typeof description === 'string' ? description : '' },
+        getMutationContext(req)
+      );
+      res.status(201).json({ board });
+    })
+  );
+
+  app.patch(
+    '/api/boards/:id',
+    asyncHandler(async (req, res) => {
+      const { title, description } = req.body ?? {};
+      const board = await service.updateBoard(
+        paramId(req),
+        {
+          ...(title !== undefined ? { title } : {}),
+          ...(description !== undefined ? { description } : {}),
+        },
+        getMutationContext(req)
+      );
+      res.json({ board });
+    })
+  );
+
+  app.delete(
+    '/api/boards/:id',
+    asyncHandler(async (req, res) => {
+      await service.deleteBoard(paramId(req), getMutationContext(req));
+      res.status(204).send();
+    })
+  );
+
+  app.get(
+    '/api/boards/:id/graph',
+    asyncHandler(async (req, res) => {
+      const graph = await service.getBoardGraph(paramId(req));
+      res.json(graph);
+    })
+  );
+
+  // Cards
+  app.post(
+    '/api/cards',
+    asyncHandler(async (req, res) => {
+      const body = req.body ?? {};
+      if (typeof body.boardId !== 'string' || typeof body.title !== 'string') {
+        throw new ValidationError('Fields "boardId" and "title" are required strings.');
+      }
+      const card = await service.createCard(
+        {
+          boardId: body.boardId,
+          title: body.title,
+          content: body.content,
+          cardType: body.cardType,
+          status: body.status,
+          tags: body.tags,
+          posX: body.posX,
+          posY: body.posY,
+        },
+        getMutationContext(req)
+      );
+      res.status(201).json({ card });
+    })
+  );
+
+  app.post(
+    '/api/cards/merge',
+    asyncHandler(async (req, res) => {
+      const body = req.body ?? {};
+      if (!Array.isArray(body.targetCardIds) || !body.mergedCard) {
+        throw new ValidationError('Fields "targetCardIds" and "mergedCard" are required.');
+      }
+      const card = await service.mergeCards(
+        {
+          targetCardIds: body.targetCardIds,
+          mergedCard: body.mergedCard,
+        },
+        getMutationContext(req)
+      );
+      res.status(201).json({ card });
+    })
+  );
+
+  app.post(
+    '/api/cards/insert-intermediate',
+    asyncHandler(async (req, res) => {
+      const body = req.body ?? {};
+      if (
+        typeof body.sourceCardId !== 'string' ||
+        typeof body.targetCardId !== 'string' ||
+        typeof body.title !== 'string'
+      ) {
+        throw new ValidationError(
+          'Fields "sourceCardId", "targetCardId", and "title" are required.'
+        );
+      }
+      const card = await service.insertIntermediateCard(
+        body.sourceCardId,
+        body.targetCardId,
+        {
+          title: body.title,
+          content: body.content,
+          cardType: body.cardType,
+          status: body.status,
+          tags: body.tags,
+        },
+        getMutationContext(req)
+      );
+      res.status(201).json({ card });
+    })
+  );
+
+  app.patch(
+    '/api/cards/:id',
+    asyncHandler(async (req, res) => {
+      const card = await service.updateCard(
+        paramId(req),
+        req.body ?? {},
+        getMutationContext(req)
+      );
+      res.json({ card });
+    })
+  );
+
+  app.delete(
+    '/api/cards/:id',
+    asyncHandler(async (req, res) => {
+      await service.deleteCard(paramId(req), getMutationContext(req));
+      res.status(204).send();
+    })
+  );
+
+  app.post(
+    '/api/cards/:id/split',
+    asyncHandler(async (req, res) => {
+      const body = req.body ?? {};
+      if (!Array.isArray(body.subCards)) {
+        throw new ValidationError('Field "subCards" must be an array.');
+      }
+      const linkMode = body.linkMode === 'parallel' ? 'parallel' : 'sequential';
+      const result = await service.splitCard(
+        {
+          targetCardId: paramId(req),
+          subCards: body.subCards,
+          linkMode,
+        },
+        getMutationContext(req)
+      );
+      res.status(201).json(result);
+    })
+  );
+
+  // Edges
+  app.post(
+    '/api/edges',
+    asyncHandler(async (req, res) => {
+      const body = req.body ?? {};
+      if (
+        typeof body.boardId !== 'string' ||
+        typeof body.sourceCardId !== 'string' ||
+        typeof body.targetCardId !== 'string'
+      ) {
+        throw new ValidationError(
+          'Fields "boardId", "sourceCardId", and "targetCardId" are required.'
+        );
+      }
+      const edge = await service.connectCards(
+        body.boardId,
+        body.sourceCardId,
+        body.targetCardId,
+        body.relationType,
+        body.label,
+        getMutationContext(req)
+      );
+      res.status(201).json({ edge });
+    })
+  );
+
+  app.delete(
+    '/api/edges/:id',
+    asyncHandler(async (req, res) => {
+      await service.disconnectCards(paramId(req), getMutationContext(req));
+      res.status(204).send();
+    })
+  );
+
+  return app;
+}
