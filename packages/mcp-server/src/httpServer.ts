@@ -10,9 +10,17 @@ import {
   type ConflictResolutionAction,
   type MutationContext,
 } from '@ariadeck/core';
+import {
+  parseCookies,
+  SESSION_COOKIE_NAME,
+  SessionAuthManager,
+} from './auth.js';
 
 export interface HttpAppOptions {
   syncEngine?: BoardSyncEngine;
+  authToken?: string | null;
+  authManager?: SessionAuthManager;
+  allowedOrigins?: string[];
 }
 
 export const MCP_SERVER_NAME = 'ariadeck-mcp';
@@ -59,6 +67,14 @@ function asyncHandler(
   };
 }
 
+function isAllowedOrigin(origin: string | undefined, extraOrigins: string[]): boolean {
+  if (!origin) return true; // Non-browser / same-origin requests
+  if (/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(origin)) {
+    return true;
+  }
+  return extraOrigins.includes(origin);
+}
+
 /**
  * Creates the Express HTTP application exposing Ariadeck's REST API
  * and Server-Sent Events (/api/events) real-time synchronization bridge.
@@ -68,8 +84,23 @@ export function createHttpApp(
   options: HttpAppOptions = {}
 ): Express {
   const { syncEngine } = options;
+  const auth =
+    options.authManager ?? new SessionAuthManager(options.authToken ?? null);
+  const extraOrigins = options.allowedOrigins ?? [];
+
   const app = express();
-  app.use(cors());
+  app.use(
+    cors({
+      origin: (origin, callback) => {
+        if (isAllowedOrigin(origin, extraOrigins)) {
+          callback(null, true);
+        } else {
+          callback(new Error('Origin not allowed by Ariadeck CORS policy.'));
+        }
+      },
+      credentials: true,
+    })
+  );
   app.use(express.json());
 
   app.get('/api/health', (_req, res) => {
@@ -77,8 +108,47 @@ export function createHttpApp(
       status: 'ok',
       service: MCP_SERVER_NAME,
       version: MCP_SERVER_VERSION,
+      authRequired: auth.isAuthRequired(),
     });
   });
+
+  // Authentication endpoints (always accessible prior to auth middleware)
+  app.get('/api/auth/status', (req, res) => {
+    res.json({
+      authRequired: auth.isAuthRequired(),
+      authenticated: auth.isRequestAuthenticated(req),
+    });
+  });
+
+  app.post('/api/auth/login', (req, res) => {
+    if (!auth.isAuthRequired()) {
+      res.json({ authRequired: false, authenticated: true });
+      return;
+    }
+    const token = typeof req.body?.token === 'string' ? req.body.token : '';
+    if (!auth.verifyToken(token)) {
+      res.status(401).json({
+        error: {
+          code: 'INVALID_TOKEN',
+          message: 'Invalid access token.',
+        },
+      });
+      return;
+    }
+    const sessionId = auth.createSession();
+    auth.setSessionCookie(req, res, sessionId);
+    res.json({ authRequired: true, authenticated: true });
+  });
+
+  app.post('/api/auth/logout', (req, res) => {
+    const cookies = parseCookies(req.header('cookie'));
+    auth.revokeSession(cookies[SESSION_COOKIE_NAME]);
+    auth.clearSessionCookie(res);
+    res.json({ authRequired: auth.isAuthRequired(), authenticated: false });
+  });
+
+  // Protect all subsequent /api/* routes when authentication is enabled
+  app.use('/api', auth.middleware());
 
   // SSE event stream for real-time desktop UI updates
   app.get('/api/events', (req, res) => {

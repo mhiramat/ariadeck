@@ -7,14 +7,23 @@ import {
   GoogleDriveSyncAdapter,
 } from '@ariadeck/core';
 import { SqliteStorageAdapter } from '@ariadeck/core/sqlite';
+import { generateSecureAuthToken, SessionAuthManager } from './auth.js';
 import { createHttpApp } from './httpServer.js';
 import { createAriadeckMcpServer, MCP_DEVICE_ID } from './mcpServer.js';
 
 async function main(): Promise<void> {
   const args = new Set(process.argv.slice(2));
   const httpMode = args.has('--http') || process.env.ARIADECK_HTTP === 'true';
+  const allowRemote =
+    args.has('--allow-remote') || process.env.ARIADECK_ALLOW_REMOTE === 'true';
+
   const dbPath = process.env.ARIADECK_DB_PATH ?? './ariadeck.db';
   const port = Number(process.env.ARIADECK_PORT ?? '3456');
+
+  // Bind strictly to loopback by default; require --allow-remote for non-loopback access.
+  const host = allowRemote
+    ? (process.env.ARIADECK_HOST ?? '0.0.0.0')
+    : '127.0.0.1';
 
   const storage = new SqliteStorageAdapter(dbPath);
   await storage.initialize();
@@ -31,10 +40,27 @@ async function main(): Promise<void> {
         )
       : undefined;
 
-    const app = createHttpApp(service, { syncEngine });
+    let authToken: string | null = process.env.ARIADECK_AUTH_TOKEN?.trim() || null;
+    let generatedToken = false;
+    if (allowRemote && !authToken) {
+      authToken = generateSecureAuthToken();
+      generatedToken = true;
+    }
 
-    // Expose stateless Streamable HTTP MCP transport alongside the REST + SSE bridge
-    app.post('/mcp', async (req, res) => {
+    const authManager = new SessionAuthManager(authToken);
+    const allowedOrigins = (process.env.ARIADECK_CORS_ORIGINS ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    const app = createHttpApp(service, {
+      syncEngine,
+      authManager,
+      allowedOrigins,
+    });
+
+    // Expose stateless Streamable HTTP MCP transport protected by the same auth middleware
+    app.post('/mcp', authManager.middleware(), async (req, res) => {
       const mcpServer = createAriadeckMcpServer(service);
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
@@ -47,10 +73,24 @@ async function main(): Promise<void> {
       await transport.handleRequest(req, res, req.body);
     });
 
-    const server = app.listen(port, () => {
+    const server = app.listen(port, host, () => {
       console.error(
-        `[ariadeck-mcp] HTTP/SSE bridge and MCP endpoint listening on http://localhost:${port} (db: ${dbPath})`
+        `[ariadeck-mcp] HTTP/SSE bridge and MCP endpoint listening on http://${host}:${port} (db: ${dbPath})`
       );
+      if (allowRemote) {
+        console.error(
+          `[ariadeck-mcp] Remote access ENABLED (--allow-remote). Token authentication is enforced.`
+        );
+      } else {
+        console.error(
+          `[ariadeck-mcp] Local-only mode (127.0.0.1). Pass --allow-remote to allow LAN access.`
+        );
+      }
+      if (generatedToken && authToken) {
+        console.error(
+          `[ariadeck-mcp] Generated one-time session access token (set ARIADECK_AUTH_TOKEN to persist):\n  ${authToken}`
+        );
+      }
     });
 
     const shutdown = async () => {
