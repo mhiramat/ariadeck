@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
-import { X, Trash2, Split, Save } from 'lucide-react';
+import { X, Trash2, Split, Save, Eye, Pencil } from 'lucide-react';
 import type { CardStatus, CardType } from '@ariadeck/core';
 import { useBoardStore } from '../store/useBoardStore.ts';
+import { MarkdownContent } from './MarkdownContent.tsx';
 
 export function InspectorPanel() {
   const graph = useBoardStore((s) => s.graph);
@@ -21,6 +22,7 @@ export function InspectorPanel() {
   const [cardType, setCardType] = useState<CardType>('idea');
   const [status, setStatus] = useState<CardStatus>('todo');
   const [tagsInput, setTagsInput] = useState('');
+  const [contentTab, setContentTab] = useState<'write' | 'preview'>('write');
 
   const [splitOpen, setSplitOpen] = useState(false);
   const [splitLines, setSplitLines] = useState('');
@@ -157,17 +159,59 @@ export function InspectorPanel() {
         </div>
 
         <div>
-          <label htmlFor="inspector-content" className="mb-1 block text-xs font-medium text-slate-400">
-            Markdown Content
-          </label>
-          <textarea
-            id="inspector-content"
-            rows={7}
-            value={content}
-            onChange={(e) => setContent(e.target.value)}
-            placeholder="Write details in Markdown..."
-            className="w-full resize-y rounded-lg border border-slate-700 bg-slate-800 p-2.5 font-mono text-xs text-slate-100 outline-none focus:border-indigo-500"
-          />
+          <div className="mb-1 flex items-center justify-between">
+            <label htmlFor="inspector-content" className="block text-xs font-medium text-slate-400">
+              Markdown Content
+            </label>
+            <div className="flex items-center rounded-md border border-slate-700 bg-slate-950 p-0.5 text-[11px]">
+              <button
+                type="button"
+                onClick={() => setContentTab('write')}
+                className={`inline-flex items-center gap-1 rounded px-2 py-0.5 font-medium transition ${
+                  contentTab === 'write'
+                    ? 'bg-indigo-600 text-white'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <Pencil className="h-2.5 w-2.5" />
+                Write
+              </button>
+              <button
+                type="button"
+                onClick={() => setContentTab('preview')}
+                className={`inline-flex items-center gap-1 rounded px-2 py-0.5 font-medium transition ${
+                  contentTab === 'preview'
+                    ? 'bg-indigo-600 text-white'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <Eye className="h-2.5 w-2.5" />
+                Preview
+              </button>
+            </div>
+          </div>
+
+          {contentTab === 'write' ? (
+            <textarea
+              id="inspector-content"
+              rows={7}
+              value={content}
+              onChange={(e) => setContent(e.target.value)}
+              placeholder="Write details in Markdown..."
+              className="w-full resize-y rounded-lg border border-slate-700 bg-slate-800 p-2.5 font-mono text-xs text-slate-100 outline-none focus:border-indigo-500"
+            />
+          ) : (
+            <div
+              aria-label="Markdown preview"
+              className="min-h-[10.5rem] rounded-lg border border-slate-700 bg-slate-950/80 p-3"
+            >
+              {content.trim() ? (
+                <MarkdownContent content={content} />
+              ) : (
+                <p className="text-xs italic text-slate-500">Nothing to preview yet.</p>
+              )}
+            </div>
+          )}
         </div>
 
         <button

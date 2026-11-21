@@ -125,4 +125,27 @@ describe('Desktop UI Components', () => {
     fireEvent.click(screen.getByRole('button', { name: /Delete Card/i }));
     expect(deleteCardSpy).toHaveBeenCalledWith('card-1');
   });
+
+  it('toggles InspectorPanel between Write and rendered Markdown Preview', () => {
+    useBoardStore.setState({
+      graph: {
+        ...sampleGraph,
+        cards: [
+          {
+            ...sampleCard,
+            content: '### Plot Summary\n\n- **Act 1**: Call to adventure',
+          },
+        ],
+      },
+    });
+
+    render(<InspectorPanel />);
+
+    fireEvent.click(screen.getByRole('button', { name: /Preview/i }));
+    expect(screen.getByRole('heading', { level: 3, name: 'Plot Summary' })).toBeInTheDocument();
+    expect(screen.getByText('Act 1').tagName).toBe('STRONG');
+
+    fireEvent.click(screen.getByRole('button', { name: /Write/i }));
+    expect(screen.getByLabelText('Markdown Content')).toBeInTheDocument();
+  });
 });

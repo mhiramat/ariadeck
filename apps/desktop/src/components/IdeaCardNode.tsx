@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, type KeyboardEvent } from 'react';
 import { Handle, Position, type Node, type NodeProps } from '@xyflow/react';
 import { Paperclip } from 'lucide-react';
 import type { Card, CardStatus, CardType } from '@ariadeck/core';
+import { MarkdownContent } from './MarkdownContent.tsx';
 
 export interface IdeaCardNodeData extends Record<string, unknown> {
   card: Card;
@@ -145,7 +146,9 @@ export function IdeaCardNode({ data, selected }: NodeProps<IdeaCardFlowNode>) {
       )}
 
       {card.content && (
-        <p className="mt-1 line-clamp-2 text-xs text-slate-400">{card.content}</p>
+        <div className="mt-1.5 max-h-24 overflow-hidden">
+          <MarkdownContent content={card.content} compact />
+        </div>
       )}
 
       {card.tags.length > 0 && (
