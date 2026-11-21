@@ -78,6 +78,19 @@ describe('Desktop UI Components', () => {
     expect(useBoardStore.getState().boardListOpen).toBe(true);
   });
 
+  it('triggers Markdown export from AppHeader', () => {
+    const exportSpy = vi.fn().mockResolvedValue({
+      filename: 'ariadeck-story-arc.md',
+      markdown: '# Story Arc',
+    });
+    useBoardStore.setState({ exportMarkdown: exportSpy });
+
+    render(<AppHeader />);
+
+    fireEvent.click(screen.getByRole('button', { name: /Export MD/i }));
+    expect(exportSpy).toHaveBeenCalledTimes(1);
+  });
+
   it('renames the active board inline from AppHeader', async () => {
     const updateBoardSpy = vi.fn().mockResolvedValue(sampleBoard);
     useBoardStore.setState({ updateBoard: updateBoardSpy });

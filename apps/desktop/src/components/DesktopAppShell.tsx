@@ -3,6 +3,7 @@ import { X } from 'lucide-react';
 import { useBoardStore } from '../store/useBoardStore.ts';
 import { AppHeader } from './AppHeader.tsx';
 import { BoardListPanel } from './BoardListPanel.tsx';
+import { ConflictResolverModal } from './ConflictResolverModal.tsx';
 import { GraphCanvas } from './GraphCanvas.tsx';
 import { InspectorPanel } from './InspectorPanel.tsx';
 import { TimelineView } from './TimelineView.tsx';
@@ -43,6 +44,7 @@ export function DesktopAppShell() {
         {viewMode === 'graph' ? <GraphCanvas /> : <TimelineView />}
 
         <InspectorPanel />
+        <ConflictResolverModal />
 
         {toasts.length > 0 && (
           <div

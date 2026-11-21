@@ -5,7 +5,10 @@ import type {
   Card,
   CardStatus,
   CardType,
+  ConflictRecord,
+  ConflictResolutionAction,
   GraphEvent,
+  MarkdownExportResult,
   RelationType,
   SplitSubCardInput,
 } from '@ariadeck/core';
@@ -26,6 +29,10 @@ export interface BoardStoreState {
   graph: BoardGraph | null;
   selectedCardId: string | null;
   boardListOpen: boolean;
+  conflictModalOpen: boolean;
+  conflicts: ConflictRecord[];
+  syncConfigured: boolean;
+  syncing: boolean;
   viewMode: DesktopViewMode;
   connectionStatus: ConnectionStatus;
   loading: boolean;
@@ -82,6 +89,10 @@ export interface BoardStoreState {
   ) => Promise<void>;
   computeTimelineLayout: () => Promise<void>;
   moveCardToTimelineStep: (cardId: string, step: number) => Promise<void>;
+  setConflictModalOpen: (open: boolean) => void;
+  triggerSync: () => Promise<void>;
+  resolveConflict: (conflictId: string, action: ConflictResolutionAction) => Promise<void>;
+  exportMarkdown: () => Promise<MarkdownExportResult | null>;
 
   startEventStream: () => () => void;
   pushToast: (kind: ToastNotification['kind'], message: string) => void;
@@ -97,6 +108,10 @@ export function createBoardStore(api: AriadeckApiClient = createAriadeckApiClien
     graph: null,
     selectedCardId: null,
     boardListOpen: false,
+    conflictModalOpen: false,
+    conflicts: [],
+    syncConfigured: false,
+    syncing: false,
     viewMode: 'graph',
     connectionStatus: 'connecting',
     loading: false,
@@ -128,10 +143,23 @@ export function createBoardStore(api: AriadeckApiClient = createAriadeckApiClien
         }
         const firstBoardId = boards[0]!.id;
         const graph = await api.getBoardGraph(firstBoardId);
+        let conflicts: ConflictRecord[] = [];
+        let syncConfigured = false;
+        if (typeof api.listConflicts === 'function') {
+          try {
+            const conflictData = await api.listConflicts(firstBoardId);
+            conflicts = conflictData.conflicts;
+            syncConfigured = conflictData.syncConfigured;
+          } catch {
+            // Ignore if conflict endpoint is unavailable in mocked tests.
+          }
+        }
         set({
           boards,
           activeBoardId: firstBoardId,
           graph,
+          conflicts,
+          syncConfigured,
           loading: false,
           connectionStatus: 'connected',
         });
@@ -355,6 +383,83 @@ export function createBoardStore(api: AriadeckApiClient = createAriadeckApiClien
     moveCardToTimelineStep: async (cardId, step) => {
       const safeStep = Math.max(0, Math.floor(step));
       await get().updateCard(cardId, { timelineOrder: safeStep });
+    },
+
+    setConflictModalOpen: (open) => set({ conflictModalOpen: open }),
+
+    triggerSync: async () => {
+      const boardId = get().activeBoardId;
+      if (!boardId) return;
+      set({ syncing: true });
+      try {
+        const result = await api.syncBoard(boardId);
+        const conflictData = await api.listConflicts(boardId);
+        await get().refreshActiveBoard();
+        set({
+          syncing: false,
+          conflicts: conflictData.conflicts,
+          syncConfigured: conflictData.syncConfigured,
+        });
+        if (result.newConflicts.length > 0) {
+          get().pushToast(
+            'info',
+            `Synced board with ${result.newConflicts.length} conflict(s) to review.`
+          );
+          set({ conflictModalOpen: true });
+        } else {
+          get().pushToast('success', 'Board synced with Google Drive.');
+        }
+      } catch (error) {
+        set({ syncing: false });
+        get().pushToast(
+          'error',
+          error instanceof Error ? error.message : 'Failed to sync board.'
+        );
+      }
+    },
+
+    resolveConflict: async (conflictId, action) => {
+      const boardId = get().activeBoardId;
+      if (!boardId) return;
+      try {
+        await api.resolveConflict(boardId, conflictId, action);
+        const conflictData = await api.listConflicts(boardId);
+        await get().refreshActiveBoard();
+        set({ conflicts: conflictData.conflicts });
+        get().pushToast('success', 'Conflict resolved.');
+      } catch (error) {
+        get().pushToast(
+          'error',
+          error instanceof Error ? error.message : 'Failed to resolve conflict.'
+        );
+      }
+    },
+
+    exportMarkdown: async () => {
+      const boardId = get().activeBoardId;
+      if (!boardId) return null;
+      try {
+        const result = await api.exportBoardMarkdown(boardId, true);
+        if (typeof document !== 'undefined' && typeof URL.createObjectURL === 'function') {
+          const blob = new Blob([result.markdown], { type: 'text/markdown;charset=utf-8' });
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = result.filename;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          URL.revokeObjectURL(url);
+        }
+        get().pushToast('success', `Exported ${result.filename}`);
+        return result;
+      } catch (error) {
+        get().pushToast(
+          'error',
+          error instanceof Error ? error.message : 'Failed to export Markdown.'
+        );
+        return null;
+      }
     },
 
     startEventStream: () => {

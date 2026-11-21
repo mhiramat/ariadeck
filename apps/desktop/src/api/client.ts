@@ -4,11 +4,15 @@ import type {
   Card,
   CardStatus,
   CardType,
+  ConflictRecord,
+  ConflictResolutionAction,
   Edge,
   GraphEvent,
+  MarkdownExportResult,
   RelationType,
   SplitCardResult,
   SplitSubCardInput,
+  SyncBoardResult,
   TimelineSortResult,
 } from '@ariadeck/core';
 
@@ -70,6 +74,14 @@ export interface AriadeckApiClient {
     input: { subCards: SplitSubCardInput[]; linkMode: 'sequential' | 'parallel' }
   ): Promise<SplitCardResult>;
   computeTimelineLayout(boardId: string): Promise<TimelineSortResult>;
+  exportBoardMarkdown(boardId: string, includeTranscripts?: boolean): Promise<MarkdownExportResult>;
+  listConflicts(boardId: string): Promise<{ conflicts: ConflictRecord[]; syncConfigured: boolean }>;
+  resolveConflict(
+    boardId: string,
+    conflictId: string,
+    action: ConflictResolutionAction
+  ): Promise<ConflictRecord>;
+  syncBoard(boardId: string): Promise<SyncBoardResult>;
   subscribeEvents(handlers: {
     onConnected?: () => void;
     onEvent: (event: GraphEvent) => void;
@@ -167,6 +179,28 @@ export function createAriadeckApiClient(baseUrl = ''): AriadeckApiClient {
       }),
     computeTimelineLayout: (boardId) =>
       request<TimelineSortResult>(`/api/boards/${boardId}/timeline/compute`, {
+        method: 'POST',
+      }),
+    exportBoardMarkdown: (boardId, includeTranscripts = true) =>
+      request<MarkdownExportResult>(
+        `/api/boards/${boardId}/export/markdown?includeTranscripts=${String(includeTranscripts)}`
+      ),
+    listConflicts: (boardId) =>
+      request<{ conflicts: ConflictRecord[]; syncConfigured: boolean }>(
+        `/api/boards/${boardId}/conflicts`
+      ),
+    resolveConflict: async (boardId, conflictId, action) => {
+      const data = await request<{ conflict: ConflictRecord }>(
+        `/api/boards/${boardId}/conflicts/${conflictId}/resolve`,
+        {
+          method: 'POST',
+          body: JSON.stringify(action),
+        }
+      );
+      return data.conflict;
+    },
+    syncBoard: (boardId) =>
+      request<SyncBoardResult>(`/api/boards/${boardId}/sync`, {
         method: 'POST',
       }),
     subscribeEvents: ({ onConnected, onEvent, onError }) => {

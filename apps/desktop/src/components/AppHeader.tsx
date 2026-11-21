@@ -1,17 +1,36 @@
 import { useState, type FormEvent } from 'react';
-import { Layers, Plus, GitBranch, Clock, Radio, FolderKanban, Pencil, Check, X } from 'lucide-react';
+import {
+  Layers,
+  Plus,
+  GitBranch,
+  Clock,
+  Radio,
+  FolderKanban,
+  Pencil,
+  Check,
+  X,
+  Download,
+  Cloud,
+  AlertTriangle,
+} from 'lucide-react';
 import { useBoardStore } from '../store/useBoardStore.ts';
 
 export function AppHeader() {
   const boards = useBoardStore((s) => s.boards);
   const activeBoardId = useBoardStore((s) => s.activeBoardId);
   const boardListOpen = useBoardStore((s) => s.boardListOpen);
+  const conflicts = useBoardStore((s) => s.conflicts);
+  const syncConfigured = useBoardStore((s) => s.syncConfigured);
+  const syncing = useBoardStore((s) => s.syncing);
   const viewMode = useBoardStore((s) => s.viewMode);
   const connectionStatus = useBoardStore((s) => s.connectionStatus);
   const selectBoard = useBoardStore((s) => s.selectBoard);
   const createBoard = useBoardStore((s) => s.createBoard);
   const updateBoard = useBoardStore((s) => s.updateBoard);
   const toggleBoardList = useBoardStore((s) => s.toggleBoardList);
+  const setConflictModalOpen = useBoardStore((s) => s.setConflictModalOpen);
+  const triggerSync = useBoardStore((s) => s.triggerSync);
+  const exportMarkdown = useBoardStore((s) => s.exportMarkdown);
   const setViewMode = useBoardStore((s) => s.setViewMode);
 
   const [creatingBoard, setCreatingBoard] = useState(false);
@@ -221,6 +240,45 @@ export function AppHeader() {
             Timeline
           </button>
         </div>
+
+        <button
+          type="button"
+          onClick={() => void exportMarkdown()}
+          disabled={!activeBoardId}
+          title="Export board as single Markdown file"
+          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1.5 text-xs font-medium text-slate-200 transition hover:border-indigo-500 hover:text-white disabled:opacity-40"
+        >
+          <Download className="h-3.5 w-3.5" />
+          Export MD
+        </button>
+
+        {conflicts.length > 0 ? (
+          <button
+            type="button"
+            onClick={() => setConflictModalOpen(true)}
+            className="inline-flex items-center gap-1.5 rounded-full border border-rose-500/40 bg-rose-500/15 px-2.5 py-1 text-xs font-semibold text-rose-300 transition hover:bg-rose-500/25"
+          >
+            <AlertTriangle className="h-3.5 w-3.5" />
+            {conflicts.length} Conflict(s)
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() =>
+              syncConfigured ? void triggerSync() : setConflictModalOpen(true)
+            }
+            disabled={syncing}
+            title={
+              syncConfigured
+                ? 'Sync board with Google Drive (Ariadeck/)'
+                : 'Google Drive sync status'
+            }
+            className="inline-flex items-center gap-1.5 rounded-full border border-slate-700 bg-slate-800/80 px-2.5 py-1 text-xs font-medium text-slate-300 transition hover:border-indigo-500 hover:text-white disabled:opacity-50"
+          >
+            <Cloud className={`h-3.5 w-3.5 ${syncing ? 'animate-pulse text-indigo-400' : ''}`} />
+            <span>{syncing ? 'Syncing...' : syncConfigured ? 'Sync Drive' : 'Local'}</span>
+          </button>
+        )}
 
         <div
           className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium ${statusConfig.cls}`}
