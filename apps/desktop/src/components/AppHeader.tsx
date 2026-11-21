@@ -12,6 +12,7 @@ import {
   Download,
   Cloud,
   AlertTriangle,
+  LogOut,
 } from 'lucide-react';
 import { useBoardStore } from '../store/useBoardStore.ts';
 
@@ -22,6 +23,8 @@ export function AppHeader() {
   const conflicts = useBoardStore((s) => s.conflicts);
   const syncConfigured = useBoardStore((s) => s.syncConfigured);
   const syncing = useBoardStore((s) => s.syncing);
+  const authRequired = useBoardStore((s) => s.authRequired);
+  const authenticated = useBoardStore((s) => s.authenticated);
   const viewMode = useBoardStore((s) => s.viewMode);
   const connectionStatus = useBoardStore((s) => s.connectionStatus);
   const selectBoard = useBoardStore((s) => s.selectBoard);
@@ -31,6 +34,7 @@ export function AppHeader() {
   const setConflictModalOpen = useBoardStore((s) => s.setConflictModalOpen);
   const triggerSync = useBoardStore((s) => s.triggerSync);
   const exportMarkdown = useBoardStore((s) => s.exportMarkdown);
+  const logout = useBoardStore((s) => s.logout);
   const setViewMode = useBoardStore((s) => s.setViewMode);
 
   const [creatingBoard, setCreatingBoard] = useState(false);
@@ -288,6 +292,18 @@ export function AppHeader() {
           <span className={`h-1.5 w-1.5 rounded-full ${statusConfig.dot}`} />
           <span>{statusConfig.text}</span>
         </div>
+
+        {authRequired && authenticated && (
+          <button
+            type="button"
+            onClick={() => void logout()}
+            aria-label="Sign out"
+            title="Sign out"
+            className="inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-800 px-2 py-1.5 text-xs text-slate-300 transition hover:border-rose-500/60 hover:text-rose-200"
+          >
+            <LogOut className="h-3.5 w-3.5" />
+          </button>
+        )}
       </div>
     </header>
   );

@@ -33,12 +33,17 @@ export interface BoardStoreState {
   conflicts: ConflictRecord[];
   syncConfigured: boolean;
   syncing: boolean;
+  authRequired: boolean;
+  authenticated: boolean;
+  authError: string | null;
   viewMode: DesktopViewMode;
   connectionStatus: ConnectionStatus;
   loading: boolean;
   toasts: ToastNotification[];
 
   initialize: () => Promise<void>;
+  login: (token: string) => Promise<boolean>;
+  logout: () => Promise<void>;
   selectBoard: (boardId: string) => Promise<void>;
   createBoard: (title: string, description?: string) => Promise<Board | null>;
   updateBoard: (
@@ -112,6 +117,9 @@ export function createBoardStore(api: AriadeckApiClient = createAriadeckApiClien
     conflicts: [],
     syncConfigured: false,
     syncing: false,
+    authRequired: false,
+    authenticated: true,
+    authError: null,
     viewMode: 'graph',
     connectionStatus: 'connecting',
     loading: false,
@@ -131,8 +139,20 @@ export function createBoardStore(api: AriadeckApiClient = createAriadeckApiClien
     },
 
     initialize: async () => {
-      set({ loading: true });
+      set({ loading: true, authError: null });
       try {
+        if (typeof api.getAuthStatus === 'function') {
+          const authStatus = await api.getAuthStatus();
+          set({
+            authRequired: authStatus.authRequired,
+            authenticated: authStatus.authenticated,
+          });
+          if (authStatus.authRequired && !authStatus.authenticated) {
+            set({ loading: false, connectionStatus: 'disconnected' });
+            return;
+          }
+        }
+
         let boards = await api.listBoards();
         if (boards.length === 0) {
           const defaultBoard = await api.createBoard({
@@ -170,6 +190,42 @@ export function createBoardStore(api: AriadeckApiClient = createAriadeckApiClien
           error instanceof Error ? error.message : 'Failed to connect to Ariadeck server.'
         );
       }
+    },
+
+    login: async (token) => {
+      set({ authError: null });
+      try {
+        const status = await api.login(token);
+        set({
+          authRequired: status.authRequired,
+          authenticated: status.authenticated,
+          authError: null,
+        });
+        if (status.authenticated) {
+          await get().initialize();
+        }
+        return status.authenticated;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Authentication failed.';
+        set({ authError: message, authenticated: false });
+        return false;
+      }
+    },
+
+    logout: async () => {
+      try {
+        await api.logout();
+      } catch {
+        // Clear local state regardless of network failure.
+      }
+      set({
+        authenticated: false,
+        graph: null,
+        boards: [],
+        activeBoardId: null,
+        selectedCardId: null,
+        connectionStatus: 'disconnected',
+      });
     },
 
     selectBoard: async (boardId) => {

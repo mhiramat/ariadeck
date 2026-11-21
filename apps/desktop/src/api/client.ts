@@ -28,8 +28,16 @@ export class ApiError extends Error {
   }
 }
 
+export interface AuthStatus {
+  authRequired: boolean;
+  authenticated: boolean;
+}
+
 export interface AriadeckApiClient {
   checkHealth(): Promise<{ status: string; service: string; version: string }>;
+  getAuthStatus(): Promise<AuthStatus>;
+  login(token: string): Promise<AuthStatus>;
+  logout(): Promise<AuthStatus>;
   listBoards(): Promise<Board[]>;
   createBoard(input: { title: string; description?: string }): Promise<Board>;
   updateBoard(boardId: string, patch: { title?: string; description?: string }): Promise<Board>;
@@ -94,6 +102,7 @@ const DESKTOP_DEVICE_ID = 'ariadeck-desktop-web';
 export function createAriadeckApiClient(baseUrl = ''): AriadeckApiClient {
   async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const res = await fetch(`${baseUrl}${path}`, {
+      credentials: 'include',
       ...init,
       headers: {
         'Content-Type': 'application/json',
@@ -123,6 +132,16 @@ export function createAriadeckApiClient(baseUrl = ''): AriadeckApiClient {
 
   return {
     checkHealth: () => request('/api/health'),
+    getAuthStatus: () => request<AuthStatus>('/api/auth/status'),
+    login: (token) =>
+      request<AuthStatus>('/api/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ token }),
+      }),
+    logout: () =>
+      request<AuthStatus>('/api/auth/logout', {
+        method: 'POST',
+      }),
     listBoards: async () => {
       const data = await request<{ boards: Board[] }>('/api/boards');
       return data.boards;
@@ -207,7 +226,9 @@ export function createAriadeckApiClient(baseUrl = ''): AriadeckApiClient {
       if (typeof EventSource === 'undefined') {
         return () => undefined;
       }
-      const source = new EventSource(`${baseUrl}/api/events`);
+      const source = new EventSource(`${baseUrl}/api/events`, {
+        withCredentials: true,
+      });
       source.addEventListener('connected', () => {
         onConnected?.();
       });

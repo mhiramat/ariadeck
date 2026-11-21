@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { X } from 'lucide-react';
 import { useBoardStore } from '../store/useBoardStore.ts';
 import { AppHeader } from './AppHeader.tsx';
+import { AuthGate } from './AuthGate.tsx';
 import { BoardListPanel } from './BoardListPanel.tsx';
 import { ConflictResolverModal } from './ConflictResolverModal.tsx';
 import { GraphCanvas } from './GraphCanvas.tsx';
@@ -9,6 +10,8 @@ import { InspectorPanel } from './InspectorPanel.tsx';
 import { TimelineView } from './TimelineView.tsx';
 
 export function DesktopAppShell() {
+  const authRequired = useBoardStore((s) => s.authRequired);
+  const authenticated = useBoardStore((s) => s.authenticated);
   const viewMode = useBoardStore((s) => s.viewMode);
   const toasts = useBoardStore((s) => s.toasts);
   const dismissToast = useBoardStore((s) => s.dismissToast);
@@ -18,11 +21,17 @@ export function DesktopAppShell() {
 
   useEffect(() => {
     void initialize();
+  }, [initialize]);
+
+  useEffect(() => {
+    if (authRequired && !authenticated) {
+      return;
+    }
     const stopStream = startEventStream();
     return () => {
       stopStream();
     };
-  }, [initialize, startEventStream]);
+  }, [authRequired, authenticated, startEventStream]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -33,6 +42,10 @@ export function DesktopAppShell() {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [selectCard]);
+
+  if (authRequired && !authenticated) {
+    return <AuthGate />;
+  }
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-slate-950 text-slate-100">
