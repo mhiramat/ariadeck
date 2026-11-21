@@ -129,6 +129,14 @@ export class InMemoryStorageAdapter implements StorageAdapter {
       .map(clone);
   }
 
+  async getAttachment(attachmentId: string, includeDeleted = false): Promise<CardAttachment | null> {
+    const att = this.attachments.get(attachmentId);
+    if (!att || (!includeDeleted && att.deletedAt !== null)) {
+      return null;
+    }
+    return clone(att);
+  }
+
   async saveAttachment(attachment: CardAttachment): Promise<void> {
     this.attachments.set(attachment.id, clone(attachment));
   }

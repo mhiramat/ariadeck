@@ -15,6 +15,8 @@ import type {
   Board,
   BoardGraph,
   Card,
+  CardAttachment,
+  CreateAttachmentInput,
   CreateBoardInput,
   CreateCardInput,
   Edge,
@@ -1043,6 +1045,155 @@ export class BoardGraphService {
     return renderBoardGraphToMarkdown(graph, {
       exportedAt: this.now(),
       ...options,
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Multimodal Attachments & Full-Text Search (Phase 4)
+  // ---------------------------------------------------------------------------
+
+  async addAttachment(
+    input: CreateAttachmentInput,
+    ctx?: MutationContext
+  ): Promise<CardAttachment> {
+    const card = await this.storage.getCard(input.cardId, false);
+    if (!card || card.boardId !== input.boardId) {
+      throw new NotFoundError('Card', input.cardId);
+    }
+    if (!input.localUri.trim()) {
+      throw new ValidationError('Attachment localUri must not be empty.');
+    }
+
+    const timestamp = this.now();
+    const deviceId = this.resolveDeviceId(ctx);
+    const attachment: CardAttachment = {
+      id: input.id ?? this.generateId(),
+      cardId: input.cardId,
+      boardId: input.boardId,
+      kind: input.kind,
+      localUri: input.localUri,
+      remoteFileId: input.remoteFileId ?? null,
+      mimeType: input.mimeType,
+      fileSize: input.fileSize ?? 0,
+      durationMs: input.durationMs ?? null,
+      transcript: input.transcript ?? null,
+      syncStatus: input.syncStatus ?? 'local_only',
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      updatedByDeviceId: deviceId,
+      version: 1,
+      deletedAt: null,
+    };
+
+    await this.storage.runInTransaction(async () => {
+      await this.storage.saveAttachment(attachment);
+      await this.recordOutbox(
+        'attachment',
+        attachment.id,
+        attachment.boardId,
+        'create',
+        attachment,
+        timestamp
+      );
+    });
+
+    this.emitEvent('card:updated', attachment.boardId, [attachment.cardId], deviceId, timestamp);
+    return attachment;
+  }
+
+  async updateAttachmentTranscript(
+    attachmentId: string,
+    transcript: string | null,
+    ctx?: MutationContext
+  ): Promise<CardAttachment> {
+    const existing = await this.storage.getAttachment(attachmentId, false);
+    if (!existing) {
+      throw new NotFoundError('Attachment', attachmentId);
+    }
+
+    const timestamp = this.now();
+    const deviceId = this.resolveDeviceId(ctx);
+    const updated: CardAttachment = {
+      ...existing,
+      transcript,
+      updatedAt: timestamp,
+      updatedByDeviceId: deviceId,
+      version: existing.version + 1,
+    };
+
+    await this.storage.runInTransaction(async () => {
+      await this.storage.saveAttachment(updated);
+      await this.recordOutbox(
+        'attachment',
+        updated.id,
+        updated.boardId,
+        'update',
+        updated,
+        timestamp
+      );
+    });
+
+    this.emitEvent('card:updated', updated.boardId, [updated.cardId], deviceId, timestamp);
+    return updated;
+  }
+
+  async deleteAttachment(attachmentId: string, ctx?: MutationContext): Promise<void> {
+    const existing = await this.storage.getAttachment(attachmentId, false);
+    if (!existing) {
+      throw new NotFoundError('Attachment', attachmentId);
+    }
+
+    const timestamp = this.now();
+    const deviceId = this.resolveDeviceId(ctx);
+    const deleted: CardAttachment = {
+      ...existing,
+      updatedAt: timestamp,
+      updatedByDeviceId: deviceId,
+      version: existing.version + 1,
+      deletedAt: timestamp,
+    };
+
+    await this.storage.runInTransaction(async () => {
+      await this.storage.saveAttachment(deleted);
+      await this.recordOutbox(
+        'attachment',
+        deleted.id,
+        deleted.boardId,
+        'delete',
+        deleted,
+        timestamp
+      );
+    });
+
+    this.emitEvent('card:updated', existing.boardId, [existing.cardId], deviceId, timestamp);
+  }
+
+  /**
+   * Searches active cards on a board across titles, Markdown bodies, tags,
+   * and attachment transcripts/captions (case-insensitive).
+   */
+  async searchCards(boardId: string, query: string): Promise<Card[]> {
+    const graph = await this.getBoardGraph(boardId);
+    const normalized = query.trim().toLowerCase();
+    if (!normalized) {
+      return graph.cards;
+    }
+
+    const transcriptsByCard = new Map<string, string[]>();
+    for (const att of graph.attachments) {
+      if (att.transcript) {
+        const list = transcriptsByCard.get(att.cardId);
+        if (list) list.push(att.transcript);
+        else transcriptsByCard.set(att.cardId, [att.transcript]);
+      }
+    }
+
+    return graph.cards.filter((card) => {
+      if (card.title.toLowerCase().includes(normalized)) return true;
+      if (card.content.toLowerCase().includes(normalized)) return true;
+      if (card.tags.some((t) => t.toLowerCase().includes(normalized))) return true;
+      const transcripts = transcriptsByCard.get(card.id) ?? [];
+      return transcripts.some((tr) => tr.toLowerCase().includes(normalized));
     });
   }
 

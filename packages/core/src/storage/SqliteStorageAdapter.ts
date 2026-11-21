@@ -458,6 +458,15 @@ export class SqliteStorageAdapter implements StorageAdapter {
     return rows.map(mapAttachmentRow);
   }
 
+  async getAttachment(attachmentId: string, includeDeleted = false): Promise<CardAttachment | null> {
+    const db = this.getDb();
+    const sql = includeDeleted
+      ? 'SELECT * FROM card_attachments WHERE id = ?'
+      : 'SELECT * FROM card_attachments WHERE id = ? AND deleted_at IS NULL';
+    const row = db.prepare(sql).get(attachmentId) as AttachmentRow | undefined;
+    return row ? mapAttachmentRow(row) : null;
+  }
+
   async saveAttachment(attachment: CardAttachment): Promise<void> {
     const db = this.getDb();
     db.prepare(

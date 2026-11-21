@@ -47,6 +47,7 @@ export interface StorageAdapter {
   // Attachments
   listAttachmentsByBoard(boardId: string, includeDeleted?: boolean): Promise<CardAttachment[]>;
   listAttachmentsByCard(cardId: string, includeDeleted?: boolean): Promise<CardAttachment[]>;
+  getAttachment(attachmentId: string, includeDeleted?: boolean): Promise<CardAttachment | null>;
   saveAttachment(attachment: CardAttachment): Promise<void>;
 
   // Sync outbox
