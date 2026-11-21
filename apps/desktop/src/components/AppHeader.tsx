@@ -1,18 +1,25 @@
 import { useState, type FormEvent } from 'react';
-import { Layers, Plus, GitBranch, Clock, Radio } from 'lucide-react';
+import { Layers, Plus, GitBranch, Clock, Radio, FolderKanban, Pencil, Check, X } from 'lucide-react';
 import { useBoardStore } from '../store/useBoardStore.ts';
 
 export function AppHeader() {
   const boards = useBoardStore((s) => s.boards);
   const activeBoardId = useBoardStore((s) => s.activeBoardId);
+  const boardListOpen = useBoardStore((s) => s.boardListOpen);
   const viewMode = useBoardStore((s) => s.viewMode);
   const connectionStatus = useBoardStore((s) => s.connectionStatus);
   const selectBoard = useBoardStore((s) => s.selectBoard);
   const createBoard = useBoardStore((s) => s.createBoard);
+  const updateBoard = useBoardStore((s) => s.updateBoard);
+  const toggleBoardList = useBoardStore((s) => s.toggleBoardList);
   const setViewMode = useBoardStore((s) => s.setViewMode);
 
   const [creatingBoard, setCreatingBoard] = useState(false);
   const [newBoardTitle, setNewBoardTitle] = useState('');
+  const [renamingBoard, setRenamingBoard] = useState(false);
+  const [renameTitle, setRenameTitle] = useState('');
+
+  const activeBoard = boards.find((b) => b.id === activeBoardId) ?? null;
 
   const handleCreateBoard = async (e: FormEvent) => {
     e.preventDefault();
@@ -21,6 +28,15 @@ export function AppHeader() {
     await createBoard(title);
     setNewBoardTitle('');
     setCreatingBoard(false);
+  };
+
+  const handleRenameBoard = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!activeBoard) return;
+    const title = renameTitle.trim();
+    if (!title) return;
+    await updateBoard(activeBoard.id, { title });
+    setRenamingBoard(false);
   };
 
   const statusConfig = {
@@ -54,22 +70,84 @@ export function AppHeader() {
         <div className="h-5 w-px bg-slate-800" />
 
         <div className="flex items-center gap-2">
-          <select
-            aria-label="Select board"
-            value={activeBoardId ?? ''}
-            onChange={(e) => {
-              if (e.target.value) {
-                void selectBoard(e.target.value);
-              }
-            }}
-            className="rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1.5 text-xs font-medium text-slate-100 outline-none focus:border-indigo-500"
+          <button
+            type="button"
+            onClick={toggleBoardList}
+            aria-pressed={boardListOpen}
+            className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition ${
+              boardListOpen
+                ? 'border-indigo-500 bg-indigo-600/20 text-indigo-200'
+                : 'border-slate-700 bg-slate-800 text-slate-200 hover:border-indigo-500 hover:text-white'
+            }`}
           >
-            {boards.map((board) => (
-              <option key={board.id} value={board.id}>
-                {board.title}
-              </option>
-            ))}
-          </select>
+            <FolderKanban className="h-3.5 w-3.5" />
+            Boards
+            <span className="rounded bg-slate-900/80 px-1.5 py-0.2 text-[10px] text-slate-300">
+              {boards.length}
+            </span>
+          </button>
+
+          {renamingBoard && activeBoard ? (
+            <form onSubmit={(e) => void handleRenameBoard(e)} className="flex items-center gap-1">
+              <input
+                type="text"
+                aria-label="Rename active board"
+                value={renameTitle}
+                onChange={(e) => setRenameTitle(e.target.value)}
+                autoFocus
+                className="w-44 rounded-lg border border-indigo-500 bg-slate-800 px-2.5 py-1 text-xs text-white outline-none"
+              />
+              <button
+                type="submit"
+                aria-label="Confirm board rename"
+                className="rounded-lg bg-indigo-600 p-1.5 text-white hover:bg-indigo-500"
+              >
+                <Check className="h-3.5 w-3.5" />
+              </button>
+              <button
+                type="button"
+                aria-label="Cancel board rename"
+                onClick={() => setRenamingBoard(false)}
+                className="rounded-lg p-1.5 text-slate-400 hover:text-white"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </form>
+          ) : (
+            <>
+              <select
+                aria-label="Select board"
+                value={activeBoardId ?? ''}
+                onChange={(e) => {
+                  if (e.target.value) {
+                    void selectBoard(e.target.value);
+                  }
+                }}
+                className="rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1.5 text-xs font-medium text-slate-100 outline-none focus:border-indigo-500"
+              >
+                {boards.map((board) => (
+                  <option key={board.id} value={board.id}>
+                    {board.title}
+                  </option>
+                ))}
+              </select>
+
+              {activeBoard && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRenameTitle(activeBoard.title);
+                    setRenamingBoard(true);
+                  }}
+                  aria-label="Rename current board"
+                  title="Rename current board"
+                  className="rounded-lg border border-slate-700 bg-slate-800 p-1.5 text-slate-300 transition hover:border-indigo-500 hover:text-white"
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </>
+          )}
 
           {creatingBoard ? (
             <form onSubmit={(e) => void handleCreateBoard(e)} className="flex items-center gap-1.5">

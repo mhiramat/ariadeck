@@ -72,6 +72,28 @@ describe('Desktop UI Components', () => {
     const timelineTab = screen.getByRole('tab', { name: /Timeline/i });
     fireEvent.click(timelineTab);
     expect(useBoardStore.getState().viewMode).toBe('timeline');
+
+    // Toggle board list sidebar
+    fireEvent.click(screen.getByRole('button', { name: /Boards/i }));
+    expect(useBoardStore.getState().boardListOpen).toBe(true);
+  });
+
+  it('renames the active board inline from AppHeader', async () => {
+    const updateBoardSpy = vi.fn().mockResolvedValue(sampleBoard);
+    useBoardStore.setState({ updateBoard: updateBoardSpy });
+
+    render(<AppHeader />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rename current board' }));
+    const input = screen.getByLabelText('Rename active board');
+    expect(input).toHaveValue('Story Arc');
+
+    fireEvent.change(input, { target: { value: 'Story Arc v2' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm board rename' }));
+
+    await waitFor(() => {
+      expect(updateBoardSpy).toHaveBeenCalledWith('board-1', { title: 'Story Arc v2' });
+    });
   });
 
   it('renders InspectorPanel for the selected card and submits updates and splits', async () => {

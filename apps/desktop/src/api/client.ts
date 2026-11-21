@@ -28,6 +28,8 @@ export interface AriadeckApiClient {
   checkHealth(): Promise<{ status: string; service: string; version: string }>;
   listBoards(): Promise<Board[]>;
   createBoard(input: { title: string; description?: string }): Promise<Board>;
+  updateBoard(boardId: string, patch: { title?: string; description?: string }): Promise<Board>;
+  deleteBoard(boardId: string): Promise<void>;
   getBoardGraph(boardId: string): Promise<BoardGraph>;
   createCard(input: {
     boardId: string;
@@ -119,6 +121,16 @@ export function createAriadeckApiClient(baseUrl = ''): AriadeckApiClient {
         body: JSON.stringify(input),
       });
       return data.board;
+    },
+    updateBoard: async (boardId, patch) => {
+      const data = await request<{ board: Board }>(`/api/boards/${boardId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(patch),
+      });
+      return data.board;
+    },
+    deleteBoard: async (boardId) => {
+      await request<void>(`/api/boards/${boardId}`, { method: 'DELETE' });
     },
     getBoardGraph: (boardId) => request<BoardGraph>(`/api/boards/${boardId}/graph`),
     createCard: async (input) => {

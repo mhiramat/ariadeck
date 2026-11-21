@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { X } from 'lucide-react';
 import { useBoardStore } from '../store/useBoardStore.ts';
 import { AppHeader } from './AppHeader.tsx';
+import { BoardListPanel } from './BoardListPanel.tsx';
 import { GraphCanvas } from './GraphCanvas.tsx';
 import { InspectorPanel } from './InspectorPanel.tsx';
 import { TimelineView } from './TimelineView.tsx';
@@ -37,6 +38,8 @@ export function DesktopAppShell() {
       <AppHeader />
 
       <div className="relative flex flex-1 overflow-hidden">
+        <BoardListPanel />
+
         {viewMode === 'graph' ? <GraphCanvas /> : <TimelineView />}
 
         <InspectorPanel />

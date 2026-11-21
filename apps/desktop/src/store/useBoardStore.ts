@@ -25,6 +25,7 @@ export interface BoardStoreState {
   activeBoardId: string | null;
   graph: BoardGraph | null;
   selectedCardId: string | null;
+  boardListOpen: boolean;
   viewMode: DesktopViewMode;
   connectionStatus: ConnectionStatus;
   loading: boolean;
@@ -33,8 +34,15 @@ export interface BoardStoreState {
   initialize: () => Promise<void>;
   selectBoard: (boardId: string) => Promise<void>;
   createBoard: (title: string, description?: string) => Promise<Board | null>;
+  updateBoard: (
+    boardId: string,
+    patch: { title?: string; description?: string }
+  ) => Promise<Board | null>;
+  deleteBoard: (boardId: string) => Promise<void>;
   refreshActiveBoard: () => Promise<void>;
 
+  toggleBoardList: () => void;
+  setBoardListOpen: (open: boolean) => void;
   selectCard: (cardId: string | null) => void;
   setViewMode: (mode: DesktopViewMode) => void;
 
@@ -88,6 +96,7 @@ export function createBoardStore(api: AriadeckApiClient = createAriadeckApiClien
     activeBoardId: null,
     graph: null,
     selectedCardId: null,
+    boardListOpen: false,
     viewMode: 'graph',
     connectionStatus: 'connecting',
     loading: false,
@@ -165,6 +174,56 @@ export function createBoardStore(api: AriadeckApiClient = createAriadeckApiClien
         return null;
       }
     },
+
+    updateBoard: async (boardId, patch) => {
+      try {
+        const updated = await api.updateBoard(boardId, patch);
+        const boards = await api.listBoards();
+        const isCurrent = get().activeBoardId === boardId;
+        const graph = isCurrent ? await api.getBoardGraph(boardId) : get().graph;
+        set({ boards, graph });
+        get().pushToast('success', `Updated board "${updated.title}".`);
+        return updated;
+      } catch (error) {
+        get().pushToast(
+          'error',
+          error instanceof Error ? error.message : 'Failed to update board.'
+        );
+        return null;
+      }
+    },
+
+    deleteBoard: async (boardId) => {
+      try {
+        await api.deleteBoard(boardId);
+        let boards = await api.listBoards();
+        if (boards.length === 0) {
+          const fallback = await api.createBoard({
+            title: 'Untitled Board',
+            description: '',
+          });
+          boards = [fallback];
+        }
+        const nextBoardId =
+          get().activeBoardId === boardId ? boards[0]!.id : (get().activeBoardId ?? boards[0]!.id);
+        const graph = await api.getBoardGraph(nextBoardId);
+        set({
+          boards,
+          activeBoardId: nextBoardId,
+          graph,
+          selectedCardId: null,
+        });
+        get().pushToast('info', 'Board deleted.');
+      } catch (error) {
+        get().pushToast(
+          'error',
+          error instanceof Error ? error.message : 'Failed to delete board.'
+        );
+      }
+    },
+
+    toggleBoardList: () => set((state) => ({ boardListOpen: !state.boardListOpen })),
+    setBoardListOpen: (open) => set({ boardListOpen: open }),
 
     refreshActiveBoard: async () => {
       const { activeBoardId, selectedCardId } = get();
