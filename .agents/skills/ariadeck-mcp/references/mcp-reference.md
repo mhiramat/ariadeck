@@ -13,6 +13,17 @@ All MCP mutations automatically stamp `updatedByDeviceId = "ariadeck-mcp-server"
 
 ## Tools
 
+### `create_board`
+Create a new Ariadeck board.
+- `title` (string, required)
+- `description` (string, optional)
+
+### `update_board`
+Rename or update the description of an existing Ariadeck board.
+- `boardId` (string, required)
+- `title` (string, optional)
+- `description` (string, optional)
+
 ### `create_card`
 Create a new card on an Ariadeck board.
 - `boardId` (string, required)

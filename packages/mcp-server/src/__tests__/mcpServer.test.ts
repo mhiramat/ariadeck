@@ -72,7 +72,19 @@ describe('Ariadeck MCP Server (Resources, Tools, Prompts)', () => {
   });
 
   it('executes CRUD, connect, split, merge, and insert_intermediate tools with MCP device ID', async () => {
-    const board = await service.createBoard({ title: 'Engineering Plan' });
+    const createdBoardRes = await client.callTool({
+      name: 'create_board',
+      arguments: { title: 'Initial Plan', description: 'Draft' },
+    });
+    const createdBoard = parseToolText(createdBoardRes) as { id: string; title: string };
+    expect(createdBoard.title).toBe('Initial Plan');
+
+    const renamedBoardRes = await client.callTool({
+      name: 'update_board',
+      arguments: { boardId: createdBoard.id, title: 'Engineering Plan' },
+    });
+    const board = parseToolText(renamedBoardRes) as { id: string; title: string };
+    expect(board.title).toBe('Engineering Plan');
 
     const c1Res = await client.callTool({
       name: 'create_card',

@@ -218,6 +218,58 @@ export function createAriadeckMcpServer(service: BoardGraphService): McpServer {
   // ---------------------------------------------------------------------------
 
   server.registerTool(
+    'create_board',
+    {
+      description: 'Create a new Ariadeck board.',
+      inputSchema: {
+        title: z.string().describe('Title of the new Ariadeck board'),
+        description: z.string().optional().describe('Optional board description'),
+      },
+    },
+    async (args) => {
+      try {
+        const board = await service.createBoard(
+          {
+            title: args.title,
+            description: args.description,
+          },
+          MCP_MUTATION_CTX
+        );
+        return toolSuccess(board);
+      } catch (error) {
+        return toolError(error);
+      }
+    }
+  );
+
+  server.registerTool(
+    'update_board',
+    {
+      description: 'Rename or update the description of an existing Ariadeck board.',
+      inputSchema: {
+        boardId: z.string().describe('ID of the Ariadeck board to update'),
+        title: z.string().optional().describe('Updated board title'),
+        description: z.string().optional().describe('Updated board description'),
+      },
+    },
+    async (args) => {
+      try {
+        const board = await service.updateBoard(
+          args.boardId,
+          {
+            ...(args.title !== undefined ? { title: args.title } : {}),
+            ...(args.description !== undefined ? { description: args.description } : {}),
+          },
+          MCP_MUTATION_CTX
+        );
+        return toolSuccess(board);
+      } catch (error) {
+        return toolError(error);
+      }
+    }
+  );
+
+  server.registerTool(
     'create_card',
     {
       description: 'Create a new card on an Ariadeck board.',
