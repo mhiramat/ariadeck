@@ -183,6 +183,25 @@ describe('Ariadeck MCP Server (Resources, Tools, Prompts)', () => {
     const mdPayload = parseToolText(mdRes) as { filename: string; markdown: string };
     expect(mdPayload.filename).toBe('ariadeck-engineering-plan.md');
     expect(mdPayload.markdown).toContain('generator: Ariadeck');
+
+    // Export and re-import board as JSON via MCP tools
+    const jsonRes = await client.callTool({
+      name: 'export_board_json',
+      arguments: { boardId: board.id },
+    });
+    const jsonPayload = parseToolText(jsonRes) as { filename: string; json: string };
+    expect(jsonPayload.filename).toBe('ariadeck-engineering-plan.json');
+
+    const importedRes = await client.callTool({
+      name: 'import_board_json',
+      arguments: { json: jsonPayload.json, titleOverride: 'Cloned Plan' },
+    });
+    const importedGraph = parseToolText(importedRes) as {
+      board: { id: string; title: string };
+      cards: Card[];
+    };
+    expect(importedGraph.board.title).toBe('Cloned Plan');
+    expect(importedGraph.board.id).not.toBe(board.id);
   });
 
   it('registers all three workflow prompts', async () => {

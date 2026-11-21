@@ -561,6 +561,52 @@ export function createAriadeckMcpServer(service: BoardGraphService): McpServer {
     }
   );
 
+  server.registerTool(
+    'export_board_json',
+    {
+      description:
+        'Export an Ariadeck board into the lossless versioned ariadeck-board v1 JSON format suitable for backups and re-importing.',
+      inputSchema: {
+        boardId: z.string().describe('ID of the Ariadeck board to export'),
+      },
+    },
+    async (args) => {
+      try {
+        const result = await service.exportBoardToJson(args.boardId);
+        return toolSuccess(result);
+      } catch (error) {
+        return toolError(error);
+      }
+    }
+  );
+
+  server.registerTool(
+    'import_board_json',
+    {
+      description:
+        'Validate and import an ariadeck-board v1 JSON string as a new Ariadeck board with freshly remapped UUIDs.',
+      inputSchema: {
+        json: z.string().describe('Serialized ariadeck-board v1 JSON document'),
+        titleOverride: z
+          .string()
+          .optional()
+          .describe('Optional title override for the newly imported board'),
+      },
+    },
+    async (args) => {
+      try {
+        const graph = await service.importBoardFromJson(
+          args.json,
+          { titleOverride: args.titleOverride },
+          MCP_MUTATION_CTX
+        );
+        return toolSuccess(graph);
+      } catch (error) {
+        return toolError(error);
+      }
+    }
+  );
+
   // ---------------------------------------------------------------------------
   // MCP Prompts (Reusable AI Workflows)
   // ---------------------------------------------------------------------------

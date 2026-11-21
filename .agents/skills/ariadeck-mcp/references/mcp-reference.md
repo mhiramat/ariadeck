@@ -84,6 +84,15 @@ Export an Ariadeck board into a single timeline-ordered Markdown document (`aria
 - `boardId` (string, required)
 - `includeTranscripts` (boolean, optional, default `true`)
 
+### `export_board_json`
+Export an Ariadeck board into the lossless versioned `ariadeck-board` v1 JSON format (`ariadeck-{board_slug}.json`).
+- `boardId` (string, required)
+
+### `import_board_json`
+Strictly validate and import an `ariadeck-board` v1 JSON document as a new board with freshly remapped UUIDs.
+- `json` (string, required)
+- `titleOverride` (string, optional)
+
 ## Prompts
 
 - `analyze_and_split_complex_cards(board_id)`

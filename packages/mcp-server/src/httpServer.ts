@@ -198,6 +198,22 @@ export function createHttpApp(
     })
   );
 
+  app.post(
+    '/api/boards/import',
+    asyncHandler(async (req, res) => {
+      const body = req.body ?? {};
+      const input = typeof body.json === 'string' ? body.json : body;
+      const titleOverride =
+        typeof body.titleOverride === 'string' ? body.titleOverride : undefined;
+      const graph = await service.importBoardFromJson(
+        input,
+        { titleOverride },
+        getMutationContext(req)
+      );
+      res.status(201).json({ graph });
+    })
+  );
+
   app.patch(
     '/api/boards/:id',
     asyncHandler(async (req, res) => {
@@ -255,6 +271,23 @@ export function createHttpApp(
           `attachment; filename="${result.filename}"`
         );
         res.send(result.markdown);
+        return;
+      }
+      res.json(result);
+    })
+  );
+
+  app.get(
+    '/api/boards/:id/export/json',
+    asyncHandler(async (req, res) => {
+      const result = await service.exportBoardToJson(paramId(req));
+      if (req.query.raw === 'true') {
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        res.setHeader(
+          'Content-Disposition',
+          `attachment; filename="${result.filename}"`
+        );
+        res.send(result.json);
         return;
       }
       res.json(result);

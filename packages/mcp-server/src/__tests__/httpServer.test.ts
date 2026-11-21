@@ -126,6 +126,34 @@ describe('HTTP REST & SSE Bridge', () => {
     expect(exported.filename).toBe('ariadeck-demo-board.md');
     expect(exported.markdown).toContain('## [Step 1] Sub 1');
 
+    // Export board as JSON and re-import as a new board via REST
+    const exportJsonRes = await fetch(`${baseUrl}/api/boards/${board.id}/export/json`);
+    expect(exportJsonRes.status).toBe(200);
+    const exportedJson = (await exportJsonRes.json()) as { filename: string; json: string };
+    expect(exportedJson.filename).toBe('ariadeck-demo-board.json');
+
+    const importRes = await fetch(`${baseUrl}/api/boards/import`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ json: exportedJson.json, titleOverride: 'Imported Copy' }),
+    });
+    expect(importRes.status).toBe(201);
+    const { graph: importedGraph } = (await importRes.json()) as {
+      graph: { board: { id: string; title: string }; cards: unknown[]; edges: unknown[] };
+    };
+    expect(importedGraph.board.id).not.toBe(board.id);
+    expect(importedGraph.board.title).toBe('Imported Copy');
+    expect(importedGraph.cards).toHaveLength(3);
+    expect(importedGraph.edges).toHaveLength(2);
+
+    // Invalid JSON payload returns 400
+    const badImportRes = await fetch(`${baseUrl}/api/boards/import`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ json: '{"format":"bad"}' }),
+    });
+    expect(badImportRes.status).toBe(400);
+
     // Sync board & query conflicts via REST
     const syncRes = await fetch(`${baseUrl}/api/boards/${board.id}/sync`, { method: 'POST' });
     expect(syncRes.status).toBe(200);
