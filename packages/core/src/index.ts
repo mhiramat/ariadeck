@@ -7,4 +7,7 @@ export * from './storage/StorageAdapter.js';
 export * from './storage/InMemoryStorageAdapter.js';
 export * from './timeline/timelineLayout.js';
 export * from './export/markdownExport.js';
+export * from './sync/RemoteSyncAdapter.js';
+export * from './sync/GoogleDriveSyncAdapter.js';
+export * from './sync/BoardSyncEngine.js';
 export * from './service/BoardGraphService.js';
