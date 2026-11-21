@@ -6,9 +6,9 @@
 
 Ariadeck is organized as a TypeScript `pnpm` monorepo:
 
-- `packages/core` (`@ariadeck/core`): Platform-agnostic domain models, SQLite/in-memory `StorageAdapter` backends (`@ariadeck/core/sqlite`), `BoardGraphService` with DFS-based DAG cycle validation, atomic `splitCard` / `mergeCards` / `insertIntermediateCard` transformations, Kahn's topological sort (`computeTimelineLayout`) with longest-path layering and violation detection, sync outbox logging, and `GraphEventBus`.
-- `packages/mcp-server` (`@ariadeck/mcp-server`, CLI: `ariadeck-mcp`): Model Context Protocol server exposing read-only board resources, graph mutation and timeline sorting tools, reusable AI workflow prompts, and a local REST + Server-Sent Events (SSE) bridge.
-- `apps/desktop` (`@ariadeck/desktop`): Modeless React + Vite + Tailwind CSS + `@xyflow/react` desktop graph canvas and interactive horizontal Timeline view with GFM Markdown rendering, inline card editing, drag-to-connect dependency wiring, a non-modal inspector panel, and live SSE synchronization.
+- `packages/core` (`@ariadeck/core`): Platform-agnostic domain models, SQLite/in-memory `StorageAdapter` backends (`@ariadeck/core/sqlite`), `BoardGraphService` with DFS-based DAG cycle validation, atomic `splitCard` / `mergeCards` / `insertIntermediateCard` transformations, Kahn's topological sort (`computeTimelineLayout`) with longest-path layering and violation detection, single-file Markdown export (`exportBoardToMarkdown`), Google Drive sync (`GoogleDriveSyncAdapter` + 5-rule `BoardSyncEngine`), sync outbox logging, and `GraphEventBus`.
+- `packages/mcp-server` (`@ariadeck/mcp-server`, CLI: `ariadeck-mcp`): Model Context Protocol server exposing read-only board resources, graph mutation/timeline/export tools, reusable AI workflow prompts, and a local REST + Server-Sent Events (SSE) bridge with optional Google Drive sync and conflict resolution endpoints.
+- `apps/desktop` (`@ariadeck/desktop`): Modeless React + Vite + Tailwind CSS + `@xyflow/react` desktop graph canvas, interactive horizontal Timeline view, non-modal Board List sidebar with inline renaming, GFM Markdown rendering, one-click Markdown export (`ariadeck-{board_slug}.md`), Conflict Resolver modal, and live SSE synchronization.
 
 For detailed architecture and specifications, see the documents in `docs/`:
 
@@ -58,6 +58,9 @@ In the Desktop UI:
 - **Drag** from a card's right handle to another card's left handle to add a dependency edge. Cyclic dependencies are automatically rejected with a toast notification.
 - Use **Split Card** in the Inspector Panel to decompose a card into sequential or parallel child cards while preserving edges.
 - Switch to the **Timeline** tab in the header and click **Auto-Sort Timeline** to arrange cards horizontally by topological dependency depth. Drag cards across step columns (or use the arrow buttons) to adjust order manually; any dependency ordering violations are highlighted in real time.
+- Click **Boards** in the header to open the non-modal Board List sidebar (switch, create, rename, or delete boards), or click the pencil icon next to the board selector for quick inline renaming.
+- Click **Export MD** in the header to download the active board as a single timeline-ordered Markdown file (`ariadeck-{board_slug}.md`) with YAML frontmatter and dependency links.
+- Use the **Sync** / **Conflict** badge in the header to synchronize with Google Drive (`Ariadeck/`) and review or resolve any offline sync conflicts in the Conflict Resolver modal.
 
 ### 2. Run the MCP Server (`ariadeck-mcp`)
 
@@ -83,6 +86,7 @@ The `ariadeck-mcp` CLI supports two transport modes:
 | `ARIADECK_DB_PATH` | `./ariadeck.db` | Relative or custom path to the local SQLite database file. |
 | `ARIADECK_PORT` | `3456` | Port for the HTTP / SSE / Streamable HTTP MCP server. |
 | `ARIADECK_HTTP` | `false` | Set to `true` to start in HTTP mode without passing `--http`. |
+| `ARIADECK_GDRIVE_ACCESS_TOKEN` | _(unset)_ | Optional Google Drive OAuth bearer token enabling remote sync under `Ariadeck/`. |
 
 #### Example MCP Client Configuration
 
@@ -109,10 +113,11 @@ Configure an MCP-compatible AI client (such as Antigravity or Claude Desktop) fr
   - `ariadeck://board/{board_id}/graph`
   - `ariadeck://board/{board_id}/summary`
 - **Tools**:
+  - `create_board`, `update_board`
   - `create_card`, `update_card`, `delete_card`
   - `connect_cards`, `disconnect_cards`
   - `split_card`, `merge_cards`, `insert_intermediate_card`
-  - `compute_timeline_layout`
+  - `compute_timeline_layout`, `export_board_markdown`
 - **Prompts**:
   - `analyze_and_split_complex_cards`
   - `find_and_merge_duplicates`
