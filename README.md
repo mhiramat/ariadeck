@@ -38,16 +38,17 @@ pnpm build
 
 ### 1. Run the Backend & Desktop UI Locally
 
-Start the local HTTP/SSE bridge and MCP server in one terminal (defaults to `./ariadeck.db` on port `3456`):
+Start both the backend HTTP/SSE/MCP server (with automatic restart via `tsx watch`) and the Desktop Vite dev server concurrently with a single command:
 
 ```bash
-pnpm dev:mcp
+pnpm dev
 ```
 
-Start the Desktop web UI in a second terminal (opens on `http://localhost:5173` and proxies `/api` to `http://localhost:3456`):
+Or run them in separate terminals if you prefer:
 
 ```bash
-pnpm dev:desktop
+pnpm dev:mcp      # Backend HTTP/SSE/MCP bridge on http://localhost:3456 (db: ./ariadeck.db)
+pnpm dev:desktop  # Desktop web UI on http://localhost:5173 (proxies /api -> :3456)
 ```
 
 In the Desktop UI:

@@ -10,7 +10,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "dev": "tsx src/cli.ts --http",
+    "dev": "tsx watch src/cli.ts --http",
     "start": "node dist/cli.js",
     "test": "vitest run"
   },
