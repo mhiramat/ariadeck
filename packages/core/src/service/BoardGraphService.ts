@@ -6,6 +6,11 @@ import {
   detectTimelineViolations,
   groupCardsByTimelineStep,
 } from '../timeline/timelineLayout.js';
+import {
+  renderBoardGraphToMarkdown,
+  type MarkdownExportOptions,
+  type MarkdownExportResult,
+} from '../export/markdownExport.js';
 import type {
   Board,
   BoardGraph,
@@ -1024,6 +1029,21 @@ export class BoardGraphService {
       steps: groupCardsByTimelineStep(updatedCards),
       violations: detectTimelineViolations(updatedCards, edges),
     };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Single-File Markdown Export (Phase 3)
+  // ---------------------------------------------------------------------------
+
+  async exportBoardToMarkdown(
+    boardId: string,
+    options?: MarkdownExportOptions
+  ): Promise<MarkdownExportResult> {
+    const graph = await this.getBoardGraph(boardId);
+    return renderBoardGraphToMarkdown(graph, {
+      exportedAt: this.now(),
+      ...options,
+    });
   }
 
   // ---------------------------------------------------------------------------
