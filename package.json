@@ -12,6 +12,7 @@
     "test": "pnpm -r test",
     "dev": "pnpm --filter @ariadeck/core build && pnpm --parallel --filter @ariadeck/mcp-server --filter @ariadeck/desktop dev",
     "dev:mcp": "pnpm --filter @ariadeck/mcp-server dev",
-    "dev:desktop": "pnpm --filter @ariadeck/desktop dev"
+    "dev:desktop": "pnpm --filter @ariadeck/desktop dev",
+    "dev:android": "pnpm --filter @ariadeck/android dev"
   }
 }
