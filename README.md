@@ -185,3 +185,7 @@ pnpm --filter @ariadeck/mcp-server test
 pnpm --filter @ariadeck/desktop test
 pnpm --filter @ariadeck/android test
 ```
+
+## License
+
+Ariadeck is licensed under the [Apache License, Version 2.0](LICENSE).
