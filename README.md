@@ -16,6 +16,7 @@ For detailed architecture and specifications, see the documents in `docs/`:
 - [Overall Design](docs/DESIGN.md)
 - [Shared Core & Schema Specification](docs/DESIGN_SPEC.md)
 - [MCP Server Specification](docs/DESIGN_MCP.md)
+- [Board JSON Import/Export Format Specification](docs/BOARD_JSON_FORMAT.md)
 - [Phase 1 Implementation Guide](docs/IMPLEMENTATION_GUIDE_PHASE1.md)
 
 ## Prerequisites
@@ -60,8 +61,8 @@ In the Desktop UI:
 - **Drag** from a card's right handle to another card's left handle to add a dependency edge. Cyclic dependencies are automatically rejected with a toast notification.
 - Use **Split Card** in the Inspector Panel to decompose a card into sequential or parallel child cards while preserving edges.
 - Switch to the **Timeline** tab in the header and click **Auto-Sort Timeline** to arrange cards horizontally by topological dependency depth. Drag cards across step columns (or use the arrow buttons) to adjust order manually; any dependency ordering violations are highlighted in real time.
-- Click **Boards** in the header to open the non-modal Board List sidebar (switch, create, rename, or delete boards), or click the pencil icon next to the board selector for quick inline renaming.
-- Click **Export MD** in the header to download the active board as a single timeline-ordered Markdown file (`ariadeck-{board_slug}.md`) with YAML frontmatter and dependency links.
+- Click the **Ariadeck** logo in the top-left corner to open the main menu (**Boards**, **New Board**, **Export MD**, **Export JSON**, and **Import JSON**).
+- Use **Export MD** to download a human-readable timeline-ordered Markdown document (`ariadeck-{board_slug}.md`), or **Export JSON** / **Import JSON** for lossless schema-validated backups and board templates (`ariadeck-{board_slug}.json`; see [BOARD_JSON_FORMAT.md](docs/BOARD_JSON_FORMAT.md)).
 - Use the **Sync** / **Conflict** badge in the header to synchronize with Google Drive (`Ariadeck/`) and review or resolve any offline sync conflicts in the Conflict Resolver modal.
 
 ### 2. Run the MCP Server (`ariadeck-mcp`)
@@ -137,7 +138,7 @@ Configure an MCP-compatible AI client (such as Antigravity or Claude Desktop) fr
   - `create_card`, `update_card`, `delete_card`
   - `connect_cards`, `disconnect_cards`
   - `split_card`, `merge_cards`, `insert_intermediate_card`
-  - `compute_timeline_layout`, `export_board_markdown`
+  - `compute_timeline_layout`, `export_board_markdown`, `export_board_json`, `import_board_json`
 - **Prompts**:
   - `analyze_and_split_complex_cards`
   - `find_and_merge_duplicates`
