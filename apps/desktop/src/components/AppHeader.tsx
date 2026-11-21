@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
 import {
   Layers,
   Plus,
@@ -10,6 +10,8 @@ import {
   Check,
   X,
   Download,
+  Upload,
+  FileJson,
   Cloud,
   AlertTriangle,
   LogOut,
@@ -35,6 +37,8 @@ export function AppHeader() {
   const setConflictModalOpen = useBoardStore((s) => s.setConflictModalOpen);
   const triggerSync = useBoardStore((s) => s.triggerSync);
   const exportMarkdown = useBoardStore((s) => s.exportMarkdown);
+  const exportJson = useBoardStore((s) => s.exportJson);
+  const importJson = useBoardStore((s) => s.importJson);
   const logout = useBoardStore((s) => s.logout);
   const setViewMode = useBoardStore((s) => s.setViewMode);
 
@@ -44,6 +48,7 @@ export function AppHeader() {
   const [renamingBoard, setRenamingBoard] = useState(false);
   const [renameTitle, setRenameTitle] = useState('');
   const menuRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const activeBoard = boards.find((b) => b.id === activeBoardId) ?? null;
 
@@ -84,6 +89,14 @@ export function AppHeader() {
     if (!title) return;
     await updateBoard(activeBoard.id, { title });
     setRenamingBoard(false);
+  };
+
+  const handleImportFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    const text = await file.text();
+    await importJson(text);
   };
 
   const statusConfig = {
@@ -180,8 +193,44 @@ export function AppHeader() {
                 <Download className="h-3.5 w-3.5 text-sky-400" />
                 Export MD
               </button>
+
+              <button
+                type="button"
+                role="menuitem"
+                disabled={!activeBoardId}
+                onClick={() => {
+                  setMenuOpen(false);
+                  void exportJson();
+                }}
+                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-xs font-medium text-slate-200 transition hover:bg-slate-800 hover:text-white disabled:opacity-40"
+              >
+                <FileJson className="h-3.5 w-3.5 text-amber-400" />
+                Export JSON
+              </button>
+
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setMenuOpen(false);
+                  fileInputRef.current?.click();
+                }}
+                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-xs font-medium text-slate-200 transition hover:bg-slate-800 hover:text-white"
+              >
+                <Upload className="h-3.5 w-3.5 text-violet-400" />
+                Import JSON
+              </button>
             </div>
           )}
+
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".json,application/json"
+            aria-label="Import board JSON file"
+            onChange={(e) => void handleImportFileChange(e)}
+            className="hidden"
+          />
         </div>
 
         <div className="h-5 w-px bg-slate-800" />

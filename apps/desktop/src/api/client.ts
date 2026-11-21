@@ -8,6 +8,7 @@ import type {
   ConflictResolutionAction,
   Edge,
   GraphEvent,
+  JsonExportResult,
   MarkdownExportResult,
   RelationType,
   SplitCardResult,
@@ -83,6 +84,8 @@ export interface AriadeckApiClient {
   ): Promise<SplitCardResult>;
   computeTimelineLayout(boardId: string): Promise<TimelineSortResult>;
   exportBoardMarkdown(boardId: string, includeTranscripts?: boolean): Promise<MarkdownExportResult>;
+  exportBoardJson(boardId: string): Promise<JsonExportResult>;
+  importBoardJson(json: string, titleOverride?: string): Promise<BoardGraph>;
   listConflicts(boardId: string): Promise<{ conflicts: ConflictRecord[]; syncConfigured: boolean }>;
   resolveConflict(
     boardId: string,
@@ -204,6 +207,18 @@ export function createAriadeckApiClient(baseUrl = ''): AriadeckApiClient {
       request<MarkdownExportResult>(
         `/api/boards/${boardId}/export/markdown?includeTranscripts=${String(includeTranscripts)}`
       ),
+    exportBoardJson: (boardId) =>
+      request<JsonExportResult>(`/api/boards/${boardId}/export/json`),
+    importBoardJson: async (json, titleOverride) => {
+      const data = await request<{ graph: BoardGraph }>('/api/boards/import', {
+        method: 'POST',
+        body: JSON.stringify({
+          json,
+          ...(titleOverride !== undefined ? { titleOverride } : {}),
+        }),
+      });
+      return data.graph;
+    },
     listConflicts: (boardId) =>
       request<{ conflicts: ConflictRecord[]; syncConfigured: boolean }>(
         `/api/boards/${boardId}/conflicts`

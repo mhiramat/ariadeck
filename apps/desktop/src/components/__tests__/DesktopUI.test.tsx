@@ -80,18 +80,45 @@ describe('Desktop UI Components', () => {
     expect(useBoardStore.getState().boardListOpen).toBe(true);
   });
 
-  it('triggers Markdown export from the Ariadeck brand menu', () => {
-    const exportSpy = vi.fn().mockResolvedValue({
+  it('triggers Markdown export, JSON export, and JSON import from the Ariadeck brand menu', async () => {
+    const exportMdSpy = vi.fn().mockResolvedValue({
       filename: 'ariadeck-story-arc.md',
       markdown: '# Story Arc',
     });
-    useBoardStore.setState({ exportMarkdown: exportSpy });
+    const exportJsonSpy = vi.fn().mockResolvedValue({
+      filename: 'ariadeck-story-arc.json',
+      json: '{}',
+    });
+    const importJsonSpy = vi.fn().mockResolvedValue(sampleGraph);
+    useBoardStore.setState({
+      exportMarkdown: exportMdSpy,
+      exportJson: exportJsonSpy,
+      importJson: importJsonSpy,
+    });
 
     render(<AppHeader />);
 
     fireEvent.click(screen.getByRole('button', { name: /Ariadeck/i }));
     fireEvent.click(screen.getByRole('menuitem', { name: /Export MD/i }));
-    expect(exportSpy).toHaveBeenCalledTimes(1);
+    expect(exportMdSpy).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('button', { name: /Ariadeck/i }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /Export JSON/i }));
+    expect(exportJsonSpy).toHaveBeenCalledTimes(1);
+
+    const fileInput = screen.getByLabelText('Import board JSON file');
+    const mockFile = {
+      name: 'ariadeck-sample.json',
+      type: 'application/json',
+      text: vi.fn().mockResolvedValue('{"format":"ariadeck-board","schemaVersion":1}'),
+    };
+    fireEvent.change(fileInput, { target: { files: [mockFile] } });
+
+    await waitFor(() => {
+      expect(importJsonSpy).toHaveBeenCalledWith(
+        '{"format":"ariadeck-board","schemaVersion":1}'
+      );
+    });
   });
 
   it('auto-dismisses toast notifications after 5 seconds', () => {

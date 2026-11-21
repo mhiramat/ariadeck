@@ -8,6 +8,7 @@ import type {
   ConflictRecord,
   ConflictResolutionAction,
   GraphEvent,
+  JsonExportResult,
   MarkdownExportResult,
   RelationType,
   SplitSubCardInput,
@@ -98,6 +99,8 @@ export interface BoardStoreState {
   triggerSync: () => Promise<void>;
   resolveConflict: (conflictId: string, action: ConflictResolutionAction) => Promise<void>;
   exportMarkdown: () => Promise<MarkdownExportResult | null>;
+  exportJson: () => Promise<JsonExportResult | null>;
+  importJson: (jsonText: string) => Promise<BoardGraph | null>;
 
   startEventStream: () => () => void;
   pushToast: (kind: ToastNotification['kind'], message: string) => void;
@@ -513,6 +516,57 @@ export function createBoardStore(api: AriadeckApiClient = createAriadeckApiClien
         get().pushToast(
           'error',
           error instanceof Error ? error.message : 'Failed to export Markdown.'
+        );
+        return null;
+      }
+    },
+
+    exportJson: async () => {
+      const boardId = get().activeBoardId;
+      if (!boardId) return null;
+      try {
+        const result = await api.exportBoardJson(boardId);
+        if (typeof document !== 'undefined' && typeof URL.createObjectURL === 'function') {
+          const blob = new Blob([result.json], { type: 'application/json;charset=utf-8' });
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = result.filename;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          URL.revokeObjectURL(url);
+        }
+        get().pushToast('success', `Exported ${result.filename}`);
+        return result;
+      } catch (error) {
+        get().pushToast(
+          'error',
+          error instanceof Error ? error.message : 'Failed to export JSON.'
+        );
+        return null;
+      }
+    },
+
+    importJson: async (jsonText) => {
+      try {
+        const graph = await api.importBoardJson(jsonText);
+        const boards = await api.listBoards();
+        set({
+          boards,
+          activeBoardId: graph.board.id,
+          graph,
+          selectedCardId: null,
+        });
+        get().pushToast(
+          'success',
+          `Imported "${graph.board.title}" (${graph.cards.length} cards, ${graph.edges.length} edges).`
+        );
+        return graph;
+      } catch (error) {
+        get().pushToast(
+          'error',
+          error instanceof Error ? error.message : 'Failed to import board JSON.'
         );
         return null;
       }
