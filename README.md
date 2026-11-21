@@ -6,9 +6,9 @@
 
 Ariadeck is organized as a TypeScript `pnpm` monorepo:
 
-- `packages/core` (`@ariadeck/core`): Platform-agnostic domain models, SQLite/in-memory `StorageAdapter` backends (`@ariadeck/core/sqlite`), `BoardGraphService` with DFS-based DAG cycle validation, atomic `splitCard` / `mergeCards` / `insertIntermediateCard` transformations, sync outbox logging, and `GraphEventBus`.
-- `packages/mcp-server` (`@ariadeck/mcp-server`, CLI: `ariadeck-mcp`): Model Context Protocol server exposing read-only board resources, graph mutation tools, reusable AI workflow prompts, and a local REST + Server-Sent Events (SSE) bridge.
-- `apps/desktop` (`@ariadeck/desktop`): Modeless React + Vite + Tailwind CSS + `@xyflow/react` desktop graph canvas with inline card editing, drag-to-connect dependency wiring, a non-modal inspector panel, and live SSE synchronization.
+- `packages/core` (`@ariadeck/core`): Platform-agnostic domain models, SQLite/in-memory `StorageAdapter` backends (`@ariadeck/core/sqlite`), `BoardGraphService` with DFS-based DAG cycle validation, atomic `splitCard` / `mergeCards` / `insertIntermediateCard` transformations, Kahn's topological sort (`computeTimelineLayout`) with longest-path layering and violation detection, sync outbox logging, and `GraphEventBus`.
+- `packages/mcp-server` (`@ariadeck/mcp-server`, CLI: `ariadeck-mcp`): Model Context Protocol server exposing read-only board resources, graph mutation and timeline sorting tools, reusable AI workflow prompts, and a local REST + Server-Sent Events (SSE) bridge.
+- `apps/desktop` (`@ariadeck/desktop`): Modeless React + Vite + Tailwind CSS + `@xyflow/react` desktop graph canvas and interactive horizontal Timeline view with GFM Markdown rendering, inline card editing, drag-to-connect dependency wiring, a non-modal inspector panel, and live SSE synchronization.
 
 For detailed architecture and specifications, see the documents in `docs/`:
 
@@ -57,6 +57,7 @@ In the Desktop UI:
 - **Double-click** a card title for inline renaming, or **single-click** a card to open the non-modal right Inspector Panel.
 - **Drag** from a card's right handle to another card's left handle to add a dependency edge. Cyclic dependencies are automatically rejected with a toast notification.
 - Use **Split Card** in the Inspector Panel to decompose a card into sequential or parallel child cards while preserving edges.
+- Switch to the **Timeline** tab in the header and click **Auto-Sort Timeline** to arrange cards horizontally by topological dependency depth. Drag cards across step columns (or use the arrow buttons) to adjust order manually; any dependency ordering violations are highlighted in real time.
 
 ### 2. Run the MCP Server (`ariadeck-mcp`)
 
@@ -111,6 +112,7 @@ Configure an MCP-compatible AI client (such as Antigravity or Claude Desktop) fr
   - `create_card`, `update_card`, `delete_card`
   - `connect_cards`, `disconnect_cards`
   - `split_card`, `merge_cards`, `insert_intermediate_card`
+  - `compute_timeline_layout`
 - **Prompts**:
   - `analyze_and_split_complex_cards`
   - `find_and_merge_duplicates`
