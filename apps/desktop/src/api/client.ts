@@ -9,6 +9,7 @@ import type {
   RelationType,
   SplitCardResult,
   SplitSubCardInput,
+  TimelineSortResult,
 } from '@ariadeck/core';
 
 export class ApiError extends Error {
@@ -48,6 +49,9 @@ export interface AriadeckApiClient {
       tags?: string[];
       posX?: number;
       posY?: number;
+      timelineOrder?: number | null;
+      startAt?: string | null;
+      endAt?: string | null;
     }
   ): Promise<Card>;
   deleteCard(cardId: string): Promise<void>;
@@ -63,6 +67,7 @@ export interface AriadeckApiClient {
     cardId: string,
     input: { subCards: SplitSubCardInput[]; linkMode: 'sequential' | 'parallel' }
   ): Promise<SplitCardResult>;
+  computeTimelineLayout(boardId: string): Promise<TimelineSortResult>;
   subscribeEvents(handlers: {
     onConnected?: () => void;
     onEvent: (event: GraphEvent) => void;
@@ -147,6 +152,10 @@ export function createAriadeckApiClient(baseUrl = ''): AriadeckApiClient {
       request<SplitCardResult>(`/api/cards/${cardId}/split`, {
         method: 'POST',
         body: JSON.stringify(input),
+      }),
+    computeTimelineLayout: (boardId) =>
+      request<TimelineSortResult>(`/api/boards/${boardId}/timeline/compute`, {
+        method: 'POST',
       }),
     subscribeEvents: ({ onConnected, onEvent, onError }) => {
       if (typeof EventSource === 'undefined') {

@@ -22,6 +22,8 @@ export function InspectorPanel() {
   const [cardType, setCardType] = useState<CardType>('idea');
   const [status, setStatus] = useState<CardStatus>('todo');
   const [tagsInput, setTagsInput] = useState('');
+  const [startAt, setStartAt] = useState('');
+  const [endAt, setEndAt] = useState('');
   const [contentTab, setContentTab] = useState<'write' | 'preview'>('write');
 
   const [splitOpen, setSplitOpen] = useState(false);
@@ -35,6 +37,8 @@ export function InspectorPanel() {
       setCardType(selectedCard.cardType);
       setStatus(selectedCard.status);
       setTagsInput(selectedCard.tags.join(', '));
+      setStartAt(selectedCard.startAt ?? '');
+      setEndAt(selectedCard.endAt ?? '');
       setSplitOpen(false);
       setSplitLines('');
     }
@@ -57,6 +61,8 @@ export function InspectorPanel() {
       cardType,
       status,
       tags,
+      startAt: startAt.trim() ? startAt.trim() : null,
+      endAt: endAt.trim() ? endAt.trim() : null,
     });
   };
 
@@ -156,6 +162,35 @@ export function InspectorPanel() {
             onChange={(e) => setTagsInput(e.target.value)}
             className="w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-xs text-white outline-none focus:border-indigo-500"
           />
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label htmlFor="inspector-start-at" className="mb-1 block text-xs font-medium text-slate-400">
+              Start (ISO / Date)
+            </label>
+            <input
+              id="inspector-start-at"
+              type="text"
+              placeholder="2026-06-01"
+              value={startAt}
+              onChange={(e) => setStartAt(e.target.value)}
+              className="w-full rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1.5 text-xs text-white outline-none focus:border-indigo-500"
+            />
+          </div>
+          <div>
+            <label htmlFor="inspector-end-at" className="mb-1 block text-xs font-medium text-slate-400">
+              End (ISO / Date)
+            </label>
+            <input
+              id="inspector-end-at"
+              type="text"
+              placeholder="2026-06-05"
+              value={endAt}
+              onChange={(e) => setEndAt(e.target.value)}
+              className="w-full rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1.5 text-xs text-white outline-none focus:border-indigo-500"
+            />
+          </div>
         </div>
 
         <div>

@@ -1,9 +1,10 @@
 import { useEffect } from 'react';
-import { Clock, X } from 'lucide-react';
+import { X } from 'lucide-react';
 import { useBoardStore } from '../store/useBoardStore.ts';
 import { AppHeader } from './AppHeader.tsx';
 import { GraphCanvas } from './GraphCanvas.tsx';
 import { InspectorPanel } from './InspectorPanel.tsx';
+import { TimelineView } from './TimelineView.tsx';
 
 export function DesktopAppShell() {
   const viewMode = useBoardStore((s) => s.viewMode);
@@ -36,20 +37,7 @@ export function DesktopAppShell() {
       <AppHeader />
 
       <div className="relative flex flex-1 overflow-hidden">
-        {viewMode === 'graph' ? (
-          <GraphCanvas />
-        ) : (
-          <div className="flex flex-1 flex-col items-center justify-center gap-3 bg-slate-950 p-8 text-center">
-            <div className="rounded-full bg-indigo-500/10 p-4 text-indigo-400">
-              <Clock className="h-8 w-8" />
-            </div>
-            <h2 className="text-lg font-semibold text-white">Timeline View (Phase 2)</h2>
-            <p className="max-w-md text-sm text-slate-400">
-              Automatic topological sorting and longest-path timeline layering will arrive in
-              Phase 2. Switch back to Graph mode to organize cards and dependencies now.
-            </p>
-          </div>
-        )}
+        {viewMode === 'graph' ? <GraphCanvas /> : <TimelineView />}
 
         <InspectorPanel />
 

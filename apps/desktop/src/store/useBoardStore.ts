@@ -55,6 +55,9 @@ export interface BoardStoreState {
       tags?: string[];
       posX?: number;
       posY?: number;
+      timelineOrder?: number | null;
+      startAt?: string | null;
+      endAt?: string | null;
     }
   ) => Promise<void>;
   deleteCard: (cardId: string) => Promise<void>;
@@ -69,6 +72,8 @@ export interface BoardStoreState {
     subCards: SplitSubCardInput[],
     linkMode: 'sequential' | 'parallel'
   ) => Promise<void>;
+  computeTimelineLayout: () => Promise<void>;
+  moveCardToTimelineStep: (cardId: string, step: number) => Promise<void>;
 
   startEventStream: () => () => void;
   pushToast: (kind: ToastNotification['kind'], message: string) => void;
@@ -268,6 +273,29 @@ export function createBoardStore(api: AriadeckApiClient = createAriadeckApiClien
           error instanceof Error ? error.message : 'Failed to split card.'
         );
       }
+    },
+
+    computeTimelineLayout: async () => {
+      const boardId = get().activeBoardId;
+      if (!boardId) return;
+      try {
+        const result = await api.computeTimelineLayout(boardId);
+        await get().refreshActiveBoard();
+        get().pushToast(
+          'success',
+          `Sorted timeline across ${result.steps.length} step(s).`
+        );
+      } catch (error) {
+        get().pushToast(
+          'error',
+          error instanceof Error ? error.message : 'Failed to compute timeline layout.'
+        );
+      }
+    },
+
+    moveCardToTimelineStep: async (cardId, step) => {
+      const safeStep = Math.max(0, Math.floor(step));
+      await get().updateCard(cardId, { timelineOrder: safeStep });
     },
 
     startEventStream: () => {
