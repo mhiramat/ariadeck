@@ -8,8 +8,12 @@ import type {
   CreateBoardInput,
   CreateCardInput,
   Edge,
+  InsertIntermediateCardInput,
+  MergeCardsParams,
   MutationContext,
   RelationType,
+  SplitCardParams,
+  SplitCardResult,
   SyncOutboxEntityType,
   SyncOutboxOperation,
   UpdateBoardInput,
@@ -481,6 +485,487 @@ export class BoardGraphService {
     });
 
     this.emitEvent('edge:deleted', existing.boardId, [deletedEdge.id], deviceId, timestamp);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Atomic graph transformations (Split, Merge, Insert Intermediate)
+  // ---------------------------------------------------------------------------
+
+  async splitCard(
+    params: SplitCardParams,
+    ctx?: MutationContext
+  ): Promise<SplitCardResult> {
+    if (params.subCards.length < 2) {
+      throw new ValidationError('splitCard requires at least 2 subCards.');
+    }
+    for (const sub of params.subCards) {
+      if (!sub.title.trim()) {
+        throw new ValidationError('Every subCard must have a non-empty title.');
+      }
+    }
+
+    const parent = await this.storage.getCard(params.targetCardId, false);
+    if (!parent) {
+      throw new NotFoundError('Card', params.targetCardId);
+    }
+
+    const timestamp = this.now();
+    const deviceId = this.resolveDeviceId(ctx);
+    const createdCards: Card[] = [];
+    const createdEdges: Edge[] = [];
+    const removedEdgeIds: string[] = [];
+    let updatedParent!: Card;
+
+    await this.storage.runInTransaction(async () => {
+      const boardEdges = await this.storage.listEdgesByBoard(parent.boardId, false);
+      const incomingEdges = boardEdges.filter((e) => e.targetCardId === parent.id);
+      const outgoingEdges = boardEdges.filter((e) => e.sourceCardId === parent.id);
+
+      const count = params.subCards.length;
+      for (let i = 0; i < count; i++) {
+        const sub = params.subCards[i]!;
+        const posX =
+          params.linkMode === 'sequential'
+            ? parent.posX + i * DEFAULT_CARD_WIDTH
+            : parent.posX;
+        const posY =
+          params.linkMode === 'sequential'
+            ? parent.posY
+            : parent.posY + (i - (count - 1) / 2) * DEFAULT_CARD_HEIGHT;
+
+        const child: Card = {
+          id: this.generateId(),
+          boardId: parent.boardId,
+          title: sub.title.trim(),
+          content: sub.content,
+          cardType: sub.cardType ?? parent.cardType,
+          status: parent.status,
+          tags: sub.tags ? [...sub.tags] : [...parent.tags],
+          posX,
+          posY,
+          timelineOrder: null,
+          startAt: null,
+          endAt: null,
+          splitFromCardId: parent.id,
+          mergedFromCardIds: null,
+          replacedByCardIds: null,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          updatedByDeviceId: deviceId,
+          version: 1,
+          deletedAt: null,
+        };
+        await this.storage.saveCard(child);
+        await this.recordOutbox('card', child.id, child.boardId, 'create', child, timestamp);
+        createdCards.push(child);
+      }
+
+      const saveNewEdge = async (
+        sourceCardId: string,
+        targetCardId: string,
+        relationType: RelationType,
+        label?: string
+      ): Promise<void> => {
+        const edge: Edge = {
+          id: this.generateId(),
+          boardId: parent.boardId,
+          sourceCardId,
+          targetCardId,
+          relationType,
+          ...(label !== undefined ? { label } : {}),
+          isConflicted: false,
+          conflictReason: null,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          updatedByDeviceId: deviceId,
+          version: 1,
+          deletedAt: null,
+        };
+        await this.storage.saveEdge(edge);
+        await this.recordOutbox('edge', edge.id, edge.boardId, 'create', edge, timestamp);
+        createdEdges.push(edge);
+      };
+
+      if (params.linkMode === 'sequential') {
+        for (let i = 0; i < createdCards.length - 1; i++) {
+          await saveNewEdge(createdCards[i]!.id, createdCards[i + 1]!.id, 'blocks');
+        }
+        const firstChild = createdCards[0]!;
+        const lastChild = createdCards[createdCards.length - 1]!;
+        for (const inc of incomingEdges) {
+          await saveNewEdge(inc.sourceCardId, firstChild.id, inc.relationType, inc.label);
+        }
+        for (const out of outgoingEdges) {
+          await saveNewEdge(lastChild.id, out.targetCardId, out.relationType, out.label);
+        }
+      } else {
+        for (const child of createdCards) {
+          for (const inc of incomingEdges) {
+            await saveNewEdge(inc.sourceCardId, child.id, inc.relationType, inc.label);
+          }
+          for (const out of outgoingEdges) {
+            await saveNewEdge(child.id, out.targetCardId, out.relationType, out.label);
+          }
+        }
+      }
+
+      for (const oldEdge of [...incomingEdges, ...outgoingEdges]) {
+        const deletedEdge: Edge = {
+          ...oldEdge,
+          updatedAt: timestamp,
+          updatedByDeviceId: deviceId,
+          version: oldEdge.version + 1,
+          deletedAt: timestamp,
+        };
+        await this.storage.saveEdge(deletedEdge);
+        await this.recordOutbox(
+          'edge',
+          deletedEdge.id,
+          deletedEdge.boardId,
+          'delete',
+          deletedEdge,
+          timestamp
+        );
+        removedEdgeIds.push(deletedEdge.id);
+      }
+
+      updatedParent = {
+        ...parent,
+        replacedByCardIds: createdCards.map((c) => c.id),
+        updatedAt: timestamp,
+        updatedByDeviceId: deviceId,
+        version: parent.version + 1,
+        deletedAt: timestamp,
+      };
+      await this.storage.saveCard(updatedParent);
+      await this.recordOutbox(
+        'card',
+        updatedParent.id,
+        updatedParent.boardId,
+        'split',
+        {
+          parentCardId: updatedParent.id,
+          replacedByCardIds: updatedParent.replacedByCardIds,
+          linkMode: params.linkMode,
+        },
+        timestamp
+      );
+    });
+
+    this.emitEvent(
+      'card:split',
+      parent.boardId,
+      [parent.id, ...createdCards.map((c) => c.id)],
+      deviceId,
+      timestamp
+    );
+
+    return {
+      parentCard: updatedParent,
+      createdCards,
+      createdEdges,
+      removedEdgeIds,
+    };
+  }
+
+  async mergeCards(
+    params: MergeCardsParams,
+    ctx?: MutationContext
+  ): Promise<Card> {
+    const uniqueIds = Array.from(new Set(params.targetCardIds));
+    if (uniqueIds.length < 2) {
+      throw new ValidationError('mergeCards requires at least 2 distinct targetCardIds.');
+    }
+
+    const title = params.mergedCard.title.trim();
+    if (!title) {
+      throw new ValidationError('Merged card title must not be empty.');
+    }
+
+    const sourceCards: Card[] = [];
+    for (const id of uniqueIds) {
+      const card = await this.storage.getCard(id, false);
+      if (!card) {
+        throw new NotFoundError('Card', id);
+      }
+      sourceCards.push(card);
+    }
+
+    const boardId = sourceCards[0]!.boardId;
+    if (sourceCards.some((c) => c.boardId !== boardId)) {
+      throw new ValidationError('All cards being merged must belong to the same board.');
+    }
+
+    const timestamp = this.now();
+    const deviceId = this.resolveDeviceId(ctx);
+    const targetSet = new Set(uniqueIds);
+
+    const avgPosX =
+      sourceCards.reduce((sum, c) => sum + c.posX, 0) / sourceCards.length;
+    const avgPosY =
+      sourceCards.reduce((sum, c) => sum + c.posY, 0) / sourceCards.length;
+
+    const mergedTags =
+      params.mergedCard.tags !== undefined
+        ? [...params.mergedCard.tags]
+        : Array.from(new Set(sourceCards.flatMap((c) => c.tags)));
+
+    const merged: Card = {
+      id: this.generateId(),
+      boardId,
+      title,
+      content: params.mergedCard.content,
+      cardType: params.mergedCard.cardType ?? sourceCards[0]!.cardType,
+      status: sourceCards[0]!.status,
+      tags: mergedTags,
+      posX: avgPosX,
+      posY: avgPosY,
+      timelineOrder: null,
+      startAt: null,
+      endAt: null,
+      splitFromCardId: null,
+      mergedFromCardIds: uniqueIds,
+      replacedByCardIds: null,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      updatedByDeviceId: deviceId,
+      version: 1,
+      deletedAt: null,
+    };
+
+    await this.storage.runInTransaction(async () => {
+      const boardEdges = await this.storage.listEdgesByBoard(boardId, false);
+      const externalIncoming: Edge[] = [];
+      const externalOutgoing: Edge[] = [];
+      const internalEdges: Edge[] = [];
+      const untouchedEdges: Edge[] = [];
+
+      for (const edge of boardEdges) {
+        const srcIn = targetSet.has(edge.sourceCardId);
+        const tgtIn = targetSet.has(edge.targetCardId);
+        if (srcIn && tgtIn) {
+          internalEdges.push(edge);
+        } else if (!srcIn && tgtIn) {
+          externalIncoming.push(edge);
+        } else if (srcIn && !tgtIn) {
+          externalOutgoing.push(edge);
+        } else {
+          untouchedEdges.push(edge);
+        }
+      }
+
+      await this.storage.saveCard(merged);
+      await this.recordOutbox('card', merged.id, boardId, 'create', merged, timestamp);
+
+      const seenTriples = new Set<string>();
+      const newEdges: Edge[] = [];
+
+      const queueRewiredEdge = (
+        sourceCardId: string,
+        targetCardId: string,
+        relationType: RelationType,
+        label?: string
+      ): void => {
+        const key = `${sourceCardId}::${targetCardId}::${relationType}`;
+        if (seenTriples.has(key)) {
+          return;
+        }
+        seenTriples.add(key);
+        newEdges.push({
+          id: this.generateId(),
+          boardId,
+          sourceCardId,
+          targetCardId,
+          relationType,
+          ...(label !== undefined ? { label } : {}),
+          isConflicted: false,
+          conflictReason: null,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          updatedByDeviceId: deviceId,
+          version: 1,
+          deletedAt: null,
+        });
+      };
+
+      for (const inc of externalIncoming) {
+        queueRewiredEdge(inc.sourceCardId, merged.id, inc.relationType, inc.label);
+      }
+      for (const out of externalOutgoing) {
+        queueRewiredEdge(merged.id, out.targetCardId, out.relationType, out.label);
+      }
+
+      // Verify that merging does not introduce a cycle in the DAG.
+      const candidateEdges = [...untouchedEdges, ...newEdges];
+      for (const edge of newEdges) {
+        if (edge.relationType === 'blocks' || edge.relationType === 'causes') {
+          const withoutSelf = candidateEdges.filter((e) => e.id !== edge.id);
+          if (this.hasDirectedPath(withoutSelf, edge.targetCardId, edge.sourceCardId)) {
+            throw new CyclicDependencyError(
+              edge.sourceCardId,
+              edge.targetCardId,
+              'Cannot merge the selected cards because re-wiring their external dependencies would introduce a cycle in the board DAG.'
+            );
+          }
+        }
+      }
+
+      for (const edge of newEdges) {
+        await this.storage.saveEdge(edge);
+        await this.recordOutbox('edge', edge.id, boardId, 'create', edge, timestamp);
+      }
+
+      for (const oldEdge of [...internalEdges, ...externalIncoming, ...externalOutgoing]) {
+        const deletedEdge: Edge = {
+          ...oldEdge,
+          updatedAt: timestamp,
+          updatedByDeviceId: deviceId,
+          version: oldEdge.version + 1,
+          deletedAt: timestamp,
+        };
+        await this.storage.saveEdge(deletedEdge);
+        await this.recordOutbox('edge', deletedEdge.id, boardId, 'delete', deletedEdge, timestamp);
+      }
+
+      for (const sourceCard of sourceCards) {
+        const replaced: Card = {
+          ...sourceCard,
+          replacedByCardIds: [merged.id],
+          updatedAt: timestamp,
+          updatedByDeviceId: deviceId,
+          version: sourceCard.version + 1,
+          deletedAt: timestamp,
+        };
+        await this.storage.saveCard(replaced);
+        await this.recordOutbox(
+          'card',
+          replaced.id,
+          boardId,
+          'merge',
+          { sourceCardId: replaced.id, replacedByCardIds: [merged.id] },
+          timestamp
+        );
+      }
+    });
+
+    this.emitEvent('card:merged', boardId, [merged.id, ...uniqueIds], deviceId, timestamp);
+    return merged;
+  }
+
+  async insertIntermediateCard(
+    sourceId: string,
+    targetId: string,
+    cardData: InsertIntermediateCardInput,
+    ctx?: MutationContext
+  ): Promise<Card> {
+    const title = cardData.title.trim();
+    if (!title) {
+      throw new ValidationError('Intermediate card title must not be empty.');
+    }
+
+    const [sourceCard, targetCard] = await Promise.all([
+      this.storage.getCard(sourceId, false),
+      this.storage.getCard(targetId, false),
+    ]);
+    if (!sourceCard) {
+      throw new NotFoundError('Card', sourceId);
+    }
+    if (!targetCard) {
+      throw new NotFoundError('Card', targetId);
+    }
+    if (sourceCard.boardId !== targetCard.boardId) {
+      throw new ValidationError('Source and target cards must belong to the same board.');
+    }
+
+    const boardId = sourceCard.boardId;
+    const boardEdges = await this.storage.listEdgesByBoard(boardId, false);
+    const existingEdge = boardEdges.find(
+      (e) => e.sourceCardId === sourceId && e.targetCardId === targetId
+    );
+    if (!existingEdge) {
+      throw new NotFoundError('Edge', `${sourceId} -> ${targetId}`);
+    }
+
+    const timestamp = this.now();
+    const deviceId = this.resolveDeviceId(ctx);
+
+    const intermediate: Card = {
+      id: this.generateId(),
+      boardId,
+      title,
+      content: cardData.content ?? '',
+      cardType: cardData.cardType ?? sourceCard.cardType,
+      status: cardData.status ?? 'todo',
+      tags: cardData.tags ? [...cardData.tags] : [],
+      posX: (sourceCard.posX + targetCard.posX) / 2,
+      posY: (sourceCard.posY + targetCard.posY) / 2,
+      timelineOrder: null,
+      startAt: null,
+      endAt: null,
+      splitFromCardId: null,
+      mergedFromCardIds: null,
+      replacedByCardIds: null,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      updatedByDeviceId: deviceId,
+      version: 1,
+      deletedAt: null,
+    };
+
+    await this.storage.runInTransaction(async () => {
+      await this.storage.saveCard(intermediate);
+      await this.recordOutbox('card', intermediate.id, boardId, 'create', intermediate, timestamp);
+
+      const deletedEdge: Edge = {
+        ...existingEdge,
+        updatedAt: timestamp,
+        updatedByDeviceId: deviceId,
+        version: existingEdge.version + 1,
+        deletedAt: timestamp,
+      };
+      await this.storage.saveEdge(deletedEdge);
+      await this.recordOutbox('edge', deletedEdge.id, boardId, 'delete', deletedEdge, timestamp);
+
+      const firstHalf: Edge = {
+        id: this.generateId(),
+        boardId,
+        sourceCardId: sourceId,
+        targetCardId: intermediate.id,
+        relationType: existingEdge.relationType,
+        ...(existingEdge.label !== undefined ? { label: existingEdge.label } : {}),
+        isConflicted: false,
+        conflictReason: null,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        updatedByDeviceId: deviceId,
+        version: 1,
+        deletedAt: null,
+      };
+
+      const secondHalf: Edge = {
+        id: this.generateId(),
+        boardId,
+        sourceCardId: intermediate.id,
+        targetCardId: targetId,
+        relationType: existingEdge.relationType,
+        ...(existingEdge.label !== undefined ? { label: existingEdge.label } : {}),
+        isConflicted: false,
+        conflictReason: null,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        updatedByDeviceId: deviceId,
+        version: 1,
+        deletedAt: null,
+      };
+
+      await this.storage.saveEdge(firstHalf);
+      await this.recordOutbox('edge', firstHalf.id, boardId, 'create', firstHalf, timestamp);
+      await this.storage.saveEdge(secondHalf);
+      await this.recordOutbox('edge', secondHalf.id, boardId, 'create', secondHalf, timestamp);
+    });
+
+    this.emitEvent('card:created', boardId, [intermediate.id], deviceId, timestamp);
+    return intermediate;
   }
 
   // ---------------------------------------------------------------------------
