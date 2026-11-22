@@ -172,7 +172,12 @@ Configure an MCP-compatible AI client (such as Antigravity or Claude Desktop) fr
 
 Ariadeck includes a portable Agent Skill at [`.agents/skills/ariadeck-mcp/SKILL.md`](.agents/skills/ariadeck-mcp/SKILL.md) that teaches LLM agents how to inspect boards, preserve DAG invariants, apply atomic splits/merges, fill dependency gaps, and sort timelines via `ariadeck-mcp`.
 
-- **Antigravity, Gemini CLI, and OpenAI Codex CLI**: Automatically discover `.agents/skills/ariadeck-mcp/`.
+- **Antigravity, Gemini CLI, and OpenAI Codex CLI**: Automatically discover `.agents/skills/ariadeck-mcp/` inside this repository. To make the skill (and optionally the `ariadeck` MCP server) available globally from *other* workspaces in Antigravity, run:
+  ```bash
+  ./scripts/install-antigravity-skill.sh            # Install global skill symlink
+  ./scripts/install-antigravity-skill.sh --with-mcp # Also register MCP server in ~/.gemini/config/mcp_config.json
+  ```
+  Pass `--copy` to copy instead of symlinking, or `--uninstall` to remove it.
 - **Claude Code / Cursor**: Copy or symlink `.agents/skills/ariadeck-mcp` into `.claude/skills/ariadeck-mcp` (or `.cursor/skills/ariadeck-mcp`).
 - See [Client Setup Guide](.agents/skills/ariadeck-mcp/references/client-setup.md) for client-specific MCP configuration snippets.
 
