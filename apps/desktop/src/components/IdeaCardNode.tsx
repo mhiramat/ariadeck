@@ -91,9 +91,18 @@ export function IdeaCardNode({ data, selected }: NodeProps<IdeaCardFlowNode>) {
       }`}
     >
       <Handle
+        id="left"
         type="target"
         position={Position.Left}
+        title="Dependency prerequisite (blocks / causes)"
         className="!h-3 !w-3 !border-2 !border-slate-900 !bg-indigo-400"
+      />
+      <Handle
+        id="top"
+        type="source"
+        position={Position.Top}
+        title="Related link (relates_to)"
+        className="!h-2.5 !w-2.5 !border-2 !border-slate-900 !bg-teal-400"
       />
 
       <div className="mb-1.5 flex items-center justify-between gap-2">
@@ -165,9 +174,18 @@ export function IdeaCardNode({ data, selected }: NodeProps<IdeaCardFlowNode>) {
       )}
 
       <Handle
+        id="right"
         type="source"
         position={Position.Right}
+        title="Dependency dependent (blocks / causes)"
         className="!h-3 !w-3 !border-2 !border-slate-900 !bg-indigo-400"
+      />
+      <Handle
+        id="bottom"
+        type="source"
+        position={Position.Bottom}
+        title="Related link (relates_to)"
+        className="!h-2.5 !w-2.5 !border-2 !border-slate-900 !bg-teal-400"
       />
     </div>
   );

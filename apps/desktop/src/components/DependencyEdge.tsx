@@ -89,7 +89,11 @@ export function DependencyEdge({
         path={edgePath}
         markerEnd={markerEnd}
         style={{
-          stroke: isConflicted ? '#f43f5e' : '#818cf8',
+          stroke: isConflicted
+            ? '#f43f5e'
+            : currentRelation === 'relates_to'
+              ? '#2dd4bf'
+              : '#818cf8',
           strokeWidth: isConflicted ? 2.5 : 2,
           strokeDasharray: currentRelation === 'relates_to' ? '6 4' : undefined,
         }}

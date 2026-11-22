@@ -102,9 +102,10 @@ describe('computeAutoGraphLayout', () => {
     const distinctYs = new Set(positions.map((p) => p.posY));
     expect(distinctYs.size).toBeGreaterThanOrEqual(3);
 
-    // Verify ZERO edges are occluded by any intermediate card
+    // Verify ZERO strong ordering edges (blocks/causes) are occluded by intermediate cards
     const occluded: string[] = [];
     for (const edge of edges) {
+      if (edge.relationType === 'relates_to') continue;
       const src = byId.get(edge.sourceCardId)!;
       const tgt = byId.get(edge.targetCardId)!;
       for (const card of cards) {

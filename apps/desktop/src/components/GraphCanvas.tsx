@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, type MouseEvent } from 'react';
 import {
   Background,
+  ConnectionMode,
   Controls,
   MarkerType,
   MiniMap,
@@ -97,29 +98,73 @@ function GraphCanvasInner() {
 
   const edges: DependencyFlowEdge[] = useMemo(() => {
     if (!graph) return [];
-    return graph.edges.map((edge) => ({
-      id: edge.id,
-      source: edge.sourceCardId,
-      target: edge.targetCardId,
-      type: 'dependency',
-      markerEnd: {
-        type: MarkerType.ArrowClosed,
-        color: edge.isConflicted ? '#f43f5e' : '#818cf8',
-      },
-      data: {
-        relationType: edge.relationType,
-        label: edge.label,
-        isConflicted: edge.isConflicted,
-        onUpdate: handleUpdateEdge,
-        onDelete: handleDeleteEdge,
-      },
-    }));
+    const cardPosById = new Map(graph.cards.map((c) => [c.id, { x: c.posX, y: c.posY }]));
+
+    return graph.edges.map((edge) => {
+      let sourceHandle = 'right';
+      let targetHandle = 'left';
+
+      if (edge.relationType === 'relates_to') {
+        const srcPos = cardPosById.get(edge.sourceCardId);
+        const tgtPos = cardPosById.get(edge.targetCardId);
+        if (srcPos && tgtPos) {
+          if (srcPos.y + 40 < tgtPos.y) {
+            sourceHandle = 'bottom';
+            targetHandle = 'top';
+          } else if (srcPos.y > tgtPos.y + 40) {
+            sourceHandle = 'top';
+            targetHandle = 'bottom';
+          } else {
+            sourceHandle = 'top';
+            targetHandle = 'top';
+          }
+        } else {
+          sourceHandle = 'bottom';
+          targetHandle = 'top';
+        }
+      }
+
+      const strokeColor = edge.isConflicted
+        ? '#f43f5e'
+        : edge.relationType === 'relates_to'
+          ? '#2dd4bf'
+          : '#818cf8';
+
+      return {
+        id: edge.id,
+        source: edge.sourceCardId,
+        target: edge.targetCardId,
+        sourceHandle,
+        targetHandle,
+        type: 'dependency',
+        markerEnd: {
+          type: MarkerType.ArrowClosed,
+          color: strokeColor,
+        },
+        data: {
+          relationType: edge.relationType,
+          label: edge.label,
+          isConflicted: edge.isConflicted,
+          onUpdate: handleUpdateEdge,
+          onDelete: handleDeleteEdge,
+        },
+      };
+    });
   }, [graph, handleUpdateEdge, handleDeleteEdge]);
 
   const onConnect = useCallback(
     (connection: Connection) => {
       if (connection.source && connection.target) {
-        void connectCards(connection.source, connection.target, 'blocks');
+        const isVerticalHandle =
+          connection.sourceHandle === 'top' ||
+          connection.sourceHandle === 'bottom' ||
+          connection.targetHandle === 'top' ||
+          connection.targetHandle === 'bottom';
+        void connectCards(
+          connection.source,
+          connection.target,
+          isVerticalHandle ? 'relates_to' : 'blocks'
+        );
       }
     },
     [connectCards]
@@ -216,6 +261,7 @@ function GraphCanvasInner() {
         onNodeDragStop={onNodeDragStop}
         onNodeClick={onNodeClick}
         onPaneClick={() => selectCard(null)}
+        connectionMode={ConnectionMode.Loose}
         zoomOnDoubleClick={false}
         fitView
         fitViewOptions={{ padding: 0.25 }}

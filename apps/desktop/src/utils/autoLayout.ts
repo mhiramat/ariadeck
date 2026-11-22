@@ -85,9 +85,13 @@ export function computeAutoGraphLayout(
 
   const cardById = new Map(activeCards.map((c) => [c.id, c]));
   const stepMap = computeTopologicalSteps(activeCards, edges);
+  // Only strong ordering edges (blocks / causes) govern horizontal left-to-right layout.
+  // Weak relates_to edges attach via top/bottom handles and do not distort horizontal flow.
   const activeEdges = edges.filter(
     (e) =>
       e.deletedAt === null &&
+      !e.isConflicted &&
+      (e.relationType === 'blocks' || e.relationType === 'causes') &&
       cardById.has(e.sourceCardId) &&
       cardById.has(e.targetCardId) &&
       e.sourceCardId !== e.targetCardId
