@@ -77,6 +77,10 @@ export interface AriadeckApiClient {
     relationType?: RelationType;
     label?: string;
   }): Promise<Edge>;
+  updateEdge(
+    edgeId: string,
+    patch: { relationType?: RelationType; label?: string | null }
+  ): Promise<Edge>;
   disconnectCards(edgeId: string): Promise<void>;
   splitCard(
     cardId: string,
@@ -188,6 +192,13 @@ export function createAriadeckApiClient(baseUrl = ''): AriadeckApiClient {
       const data = await request<{ edge: Edge }>('/api/edges', {
         method: 'POST',
         body: JSON.stringify(input),
+      });
+      return data.edge;
+    },
+    updateEdge: async (edgeId, patch) => {
+      const data = await request<{ edge: Edge }>(`/api/edges/${edgeId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(patch),
       });
       return data.edge;
     },

@@ -36,6 +36,7 @@ function GraphCanvasInner() {
   const createCard = useBoardStore((s) => s.createCard);
   const updateCard = useBoardStore((s) => s.updateCard);
   const connectCards = useBoardStore((s) => s.connectCards);
+  const updateEdge = useBoardStore((s) => s.updateEdge);
   const disconnectCards = useBoardStore((s) => s.disconnectCards);
   const pushToast = useBoardStore((s) => s.pushToast);
 
@@ -46,6 +47,13 @@ function GraphCanvasInner() {
       void updateCard(cardId, { title });
     },
     [updateCard]
+  );
+
+  const handleUpdateEdge = useCallback(
+    (edgeId: string, patch: { relationType: 'blocks' | 'causes' | 'relates_to'; label: string | null }) => {
+      void updateEdge(edgeId, patch);
+    },
+    [updateEdge]
   );
 
   const handleDeleteEdge = useCallback(
@@ -102,10 +110,11 @@ function GraphCanvasInner() {
         relationType: edge.relationType,
         label: edge.label,
         isConflicted: edge.isConflicted,
+        onUpdate: handleUpdateEdge,
         onDelete: handleDeleteEdge,
       },
     }));
-  }, [graph, handleDeleteEdge]);
+  }, [graph, handleUpdateEdge, handleDeleteEdge]);
 
   const onConnect = useCallback(
     (connection: Connection) => {

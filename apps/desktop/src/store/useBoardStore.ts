@@ -87,6 +87,10 @@ export interface BoardStoreState {
     targetCardId: string,
     relationType?: RelationType
   ) => Promise<void>;
+  updateEdge: (
+    edgeId: string,
+    patch: { relationType?: RelationType; label?: string | null }
+  ) => Promise<void>;
   disconnectCards: (edgeId: string) => Promise<void>;
   splitCard: (
     cardId: string,
@@ -391,6 +395,18 @@ export function createBoardStore(api: AriadeckApiClient = createAriadeckApiClien
         get().pushToast(
           'error',
           error instanceof Error ? error.message : 'Failed to connect cards.'
+        );
+      }
+    },
+
+    updateEdge: async (edgeId, patch) => {
+      try {
+        await api.updateEdge(edgeId, patch);
+        await get().refreshActiveBoard();
+      } catch (error) {
+        get().pushToast(
+          'error',
+          error instanceof Error ? error.message : 'Failed to update edge.'
         );
       }
     },
