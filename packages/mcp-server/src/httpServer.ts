@@ -487,6 +487,22 @@ export function createHttpApp(
     })
   );
 
+  app.patch(
+    '/api/edges/:id',
+    asyncHandler(async (req, res) => {
+      const body = req.body ?? {};
+      const edge = await service.updateEdge(
+        paramId(req),
+        {
+          ...(body.relationType !== undefined ? { relationType: body.relationType } : {}),
+          ...(body.label !== undefined ? { label: body.label } : {}),
+        },
+        getMutationContext(req)
+      );
+      res.json({ edge });
+    })
+  );
+
   app.delete(
     '/api/edges/:id',
     asyncHandler(async (req, res) => {

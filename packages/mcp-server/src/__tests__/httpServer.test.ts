@@ -74,6 +74,20 @@ describe('HTTP REST & SSE Bridge', () => {
       }),
     });
     expect(edgeRes.status).toBe(201);
+    const { edge: createdEdge } = (await edgeRes.json()) as { edge: { id: string } };
+
+    // Update edge relationType and label via PATCH
+    const patchEdgeRes = await fetch(`${baseUrl}/api/edges/${createdEdge.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ relationType: 'causes', label: 'triggers' }),
+    });
+    expect(patchEdgeRes.status).toBe(200);
+    const { edge: patchedEdge } = (await patchEdgeRes.json()) as {
+      edge: { relationType: string; label?: string };
+    };
+    expect(patchedEdge.relationType).toBe('causes');
+    expect(patchedEdge.label).toBe('triggers');
 
     // Cyclic edge returns 409 Conflict
     const cyclicRes = await fetch(`${baseUrl}/api/edges`, {
