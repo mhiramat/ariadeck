@@ -122,6 +122,15 @@ describe.each([
     // Non-blocking 'relates_to' association is permitted even if a path exists.
     const relatesEdge = await service.connectCards(board.id, c.id, a.id, 'relates_to');
     expect(relatesEdge.relationType).toBe('relates_to');
+
+    // Updating edge label works, but promoting a reverse relates_to edge to blocks must fail
+    const labeled = await service.updateEdge(relatesEdge.id, { label: 'foreshadows' });
+    expect(labeled.label).toBe('foreshadows');
+    expect(labeled.version).toBe(2);
+
+    await expect(
+      service.updateEdge(relatesEdge.id, { relationType: 'blocks' })
+    ).rejects.toThrow(CyclicDependencyError);
   });
 
   it('deduplicates identical edges and emits events on mutations', async () => {

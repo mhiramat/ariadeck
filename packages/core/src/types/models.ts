@@ -170,6 +170,11 @@ export interface UpdateCardInput {
   endAt?: string | null;
 }
 
+export interface UpdateEdgeInput {
+  relationType?: RelationType;
+  label?: string | null;
+}
+
 export interface CreateAttachmentInput {
   id?: string;
   cardId: string;

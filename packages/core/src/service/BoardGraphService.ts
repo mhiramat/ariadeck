@@ -38,6 +38,7 @@ import type {
   TimelineSortResult,
   UpdateBoardInput,
   UpdateCardInput,
+  UpdateEdgeInput,
 } from '../types/models.js';
 
 export interface BoardGraphServiceOptions {
@@ -474,6 +475,69 @@ export class BoardGraphService {
 
     this.emitEvent('edge:created', boardId, [edge.id], deviceId, timestamp);
     return edge;
+  }
+
+  async updateEdge(
+    edgeId: string,
+    patch: UpdateEdgeInput,
+    ctx?: MutationContext
+  ): Promise<Edge> {
+    const existing = await this.storage.getEdge(edgeId, false);
+    if (!existing) {
+      throw new NotFoundError('Edge', edgeId);
+    }
+
+    const nextRelationType = patch.relationType ?? existing.relationType;
+    const otherEdges = (await this.storage.listEdgesByBoard(existing.boardId, false)).filter(
+      (e) => e.id !== edgeId
+    );
+
+    if (nextRelationType !== existing.relationType) {
+      const duplicate = otherEdges.find(
+        (e) =>
+          e.sourceCardId === existing.sourceCardId &&
+          e.targetCardId === existing.targetCardId &&
+          e.relationType === nextRelationType
+      );
+      if (duplicate) {
+        throw new ValidationError(
+          `An edge with relationType "${nextRelationType}" already exists between these cards.`
+        );
+      }
+
+      if (nextRelationType === 'blocks' || nextRelationType === 'causes') {
+        if (this.hasDirectedPath(otherEdges, existing.targetCardId, existing.sourceCardId)) {
+          throw new CyclicDependencyError(existing.sourceCardId, existing.targetCardId);
+        }
+      }
+    }
+
+    const timestamp = this.now();
+    const deviceId = this.resolveDeviceId(ctx);
+    const updated: Edge = {
+      ...existing,
+      relationType: nextRelationType,
+      updatedAt: timestamp,
+      updatedByDeviceId: deviceId,
+      version: existing.version + 1,
+    };
+
+    if (patch.label !== undefined) {
+      const trimmed = patch.label === null ? '' : patch.label.trim();
+      if (trimmed) {
+        updated.label = trimmed;
+      } else {
+        delete updated.label;
+      }
+    }
+
+    await this.storage.runInTransaction(async () => {
+      await this.storage.saveEdge(updated);
+      await this.recordOutbox('edge', updated.id, updated.boardId, 'update', updated, timestamp);
+    });
+
+    this.emitEvent('board:updated', updated.boardId, [updated.id], deviceId, timestamp);
+    return updated;
   }
 
   async disconnectCards(edgeId: string, ctx?: MutationContext): Promise<void> {
