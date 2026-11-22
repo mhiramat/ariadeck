@@ -220,8 +220,10 @@ function GraphCanvasInner() {
           nodeColor="#6366f1"
           nodeStrokeColor="#a5b4fc"
           nodeBorderRadius={4}
-          maskColor="rgba(15, 23, 42, 0.7)"
-          bgColor="#0f172a"
+          maskColor="rgba(2, 6, 23, 0.72)"
+          maskStrokeColor="#38bdf8"
+          maskStrokeWidth={2}
+          bgColor="#1e293b"
           className="!rounded-lg !border !border-slate-700/80"
         />
       </ReactFlow>
