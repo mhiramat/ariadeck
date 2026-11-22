@@ -65,9 +65,11 @@ pnpm dev
 Or run them in separate terminals if you prefer:
 
 ```bash
-pnpm dev:mcp      # Backend HTTP/SSE/MCP bridge on http://localhost:3456 (db: ./ariadeck.db)
+pnpm dev:mcp      # Backend HTTP/SSE/MCP bridge on http://127.0.0.1:3456
 pnpm dev:desktop  # Desktop web UI on http://localhost:5173 (proxies /api -> :3456)
 ```
+
+> **First-time sign-in**: On startup, `ariadeck-mcp --http` automatically creates a user-private access token at `~/.config/ariadeck/auth-token` (`0600`) and prints a one-click `http://127.0.0.1:5173/#token=<token>` URL. Opening that URL (or picking the token file in the **Sign in to Ariadeck** screen) exchanges the token for an `HttpOnly` session cookie.
 
 In the Desktop UI:
 
@@ -102,28 +104,34 @@ The `ariadeck-mcp` CLI supports two transport modes:
 
 | Variable | Default | Description |
 | :--- | :--- | :--- |
-| `ARIADECK_DB_PATH` | `./ariadeck.db` | Relative or custom path to the local SQLite database file. |
+| `ARIADECK_DB_PATH` | `${XDG_DATA_HOME:-~/.local/share}/ariadeck/ariadeck.db` | Path to the local SQLite database file (parent dir `0700`, DB/WAL/SHM files `0600` on POSIX). |
 | `ARIADECK_PORT` | `3456` | Port for the HTTP / SSE / Streamable HTTP MCP server. |
 | `ARIADECK_HTTP` | `false` | Set to `true` to start in HTTP mode without passing `--http`. |
 | `ARIADECK_ALLOW_REMOTE` | `false` | Set to `true` (or pass `--allow-remote`) to bind beyond `127.0.0.1` for LAN/remote access. |
 | `ARIADECK_HOST` | `0.0.0.0` (with `--allow-remote`) | Bind address when remote access is explicitly enabled (otherwise locked to `127.0.0.1`). |
-| `ARIADECK_AUTH_TOKEN` | _(auto-generated in remote mode)_ | Access token required for browser login (`HttpOnly` session cookie) and HTTP `/mcp` Bearer authentication. |
+| `ARIADECK_AUTH_TOKEN` | _(loaded from `auth-token` file)_ | Access token override for browser login (`HttpOnly` session cookie) and HTTP `/mcp` Bearer authentication. |
+| `ARIADECK_AUTH_TOKEN_FILE` | `${XDG_CONFIG_HOME:-~/.config}/ariadeck/auth-token` | User-private (`0600`) file storing the persistent access token (auto-generated if absent). |
+| `ARIADECK_NO_AUTH` | `false` | Set to `true` (or pass `--no-auth`) to disable loopback-only auth on `127.0.0.1` (forbidden with `--allow-remote`). |
 | `ARIADECK_CORS_ORIGINS` | _(loopback only)_ | Comma-separated extra allowed browser origins when accessing remotely (e.g. `http://192.168.1.10:5173`). |
 | `ARIADECK_GDRIVE_ACCESS_TOKEN` | _(unset)_ | Optional Google Drive OAuth bearer token enabling remote sync under `Ariadeck/`. |
 
-#### Security & Remote Access
+#### Security, Multi-User Hosts & Remote Access
 
-By default, `@ariadeck/mcp-server --http` binds strictly to `127.0.0.1` so other devices on the network cannot reach your local database. To enable remote/LAN access safely:
+To protect your boards even on shared multi-user Linux hosts:
+
+- **Default XDG Private Storage**: By default, the SQLite database is stored in `${XDG_DATA_HOME:-~/.local/share}/ariadeck/ariadeck.db` (`0700` directory, `0600` DB/WAL/SHM files) and the persistent 256-bit access token is stored in `${XDG_CONFIG_HOME:-~/.config}/ariadeck/auth-token` (`0700` directory, `0600` file).
+- **Always-On Loopback Authentication**: `@ariadeck/mcp-server --http` binds strictly to `127.0.0.1` and enforces token authentication by default so other local users on the same machine cannot access your boards. Pass `--no-auth` only on trusted single-user setups when you explicitly want unauthenticated loopback access.
+- **Browser Sign-In**: Open the one-click `http://127.0.0.1:5173/#token=<token>` URL printed on startup (the frontend immediately strips `#token=` from the URL bar and exchanges it for an `HttpOnly; SameSite=Strict` session cookie), or paste/select `~/.config/ariadeck/auth-token` in the **Sign in to Ariadeck** screen.
+- **External HTTP MCP Clients**: Authenticate via `Authorization: Bearer <token>`.
+- **Android Sandbox**: `@ariadeck/android` runs local-first inside Android's per-app Linux UID sandbox (`/data/user/0/<appId>/`) without opening a local TCP server; future remote-server sync will store tokens in app-private / Android Keystore-backed storage.
+
+To enable remote/LAN access safely:
 
 ```bash
 ARIADECK_AUTH_TOKEN="your-strong-passphrase" \
 ARIADECK_CORS_ORIGINS="http://<host-ip>:5173" \
 pnpm --filter @ariadeck/mcp-server exec tsx src/cli.ts --http --allow-remote
 ```
-
-- If `ARIADECK_AUTH_TOKEN` is omitted with `--allow-remote`, the server automatically generates and prints a 256-bit random access token on startup so remote mode never runs unauthenticated.
-- Browsers sign in once via the **Unlock Workspace** screen (which issues an `HttpOnly; SameSite=Strict` session cookie for both REST and SSE).
-- External HTTP MCP clients authenticate via `Authorization: Bearer <token>`.
 
 #### Example MCP Client Configuration
 
