@@ -1,0 +1,212 @@
+{
+  "format": "ariadeck-board",
+  "schemaVersion": 1,
+  "exportedAt": "2026-11-22T11:00:00.000Z",
+  "board": {
+    "title": "Ariadeck Implementation Roadmap",
+    "description": "Phased implementation plan for Ariadeck across core, MCP server, desktop UI, sync, and Android."
+  },
+  "cards": [
+    {
+      "id": "init-monorepo",
+      "title": "Initialize Monorepo",
+      "content": "Set up pnpm workspace, strict TypeScript config, and `@ariadeck/*` packages.",
+      "cardType": "task",
+      "status": "done",
+      "tags": ["phase1", "infra"],
+      "posX": 80,
+      "posY": 80,
+      "timelineOrder": 0,
+      "startAt": null,
+      "endAt": null
+    },
+    {
+      "id": "arch-specs",
+      "title": "Architecture & MCP Specs",
+      "content": "Finalize domain schema, DAG invariants, and `ariadeck-mcp` tool contracts.",
+      "cardType": "note",
+      "status": "done",
+      "tags": ["docs", "spec"],
+      "posX": 80,
+      "posY": 310,
+      "timelineOrder": 0,
+      "startAt": null,
+      "endAt": null
+    },
+    {
+      "id": "core-storage",
+      "title": "Core Schema & SQLite Adapter",
+      "content": "Implement `Card`/`Edge` models, sync metadata, and `SqliteStorageAdapter`.",
+      "cardType": "task",
+      "status": "done",
+      "tags": ["phase1", "core"],
+      "posX": 430,
+      "posY": 195,
+      "timelineOrder": 1,
+      "startAt": null,
+      "endAt": null
+    },
+    {
+      "id": "dag-service",
+      "title": "BoardGraphService & DAG Engine",
+      "content": "Add DFS cycle checks, `splitCard`, `mergeCards`, and `GraphEventBus`.",
+      "cardType": "task",
+      "status": "done",
+      "tags": ["phase1", "core"],
+      "posX": 780,
+      "posY": 80,
+      "timelineOrder": 2,
+      "startAt": null,
+      "endAt": null
+    },
+    {
+      "id": "timeline-engine",
+      "title": "Timeline Layout Engine",
+      "content": "Compute Kahn topological steps with longest-path layering and violation alerts.",
+      "cardType": "task",
+      "status": "done",
+      "tags": ["phase2", "core"],
+      "posX": 780,
+      "posY": 310,
+      "timelineOrder": 2,
+      "startAt": null,
+      "endAt": null
+    },
+    {
+      "id": "mcp-server",
+      "title": "MCP Server & SSE Bridge",
+      "content": "Expose `ariadeck-mcp` tools/resources plus REST and `/api/events` SSE bridge.",
+      "cardType": "task",
+      "status": "done",
+      "tags": ["phase1", "mcp"],
+      "posX": 1130,
+      "posY": 80,
+      "timelineOrder": 3,
+      "startAt": null,
+      "endAt": null
+    },
+    {
+      "id": "desktop-ui",
+      "title": "Desktop Graph & Timeline UI",
+      "content": "Build modeless React Flow canvas, Auto-Layout, and interactive Timeline view.",
+      "cardType": "task",
+      "status": "in_progress",
+      "tags": ["phase2", "desktop"],
+      "posX": 1130,
+      "posY": 310,
+      "timelineOrder": 3,
+      "startAt": null,
+      "endAt": null
+    },
+    {
+      "id": "sync-export",
+      "title": "Drive Sync & JSON/MD Export",
+      "content": "Add Google Drive sync, Conflict Resolver, and schema-validated JSON/MD export.",
+      "cardType": "task",
+      "status": "in_progress",
+      "tags": ["phase3", "sync"],
+      "posX": 1130,
+      "posY": 540,
+      "timelineOrder": 3,
+      "startAt": null,
+      "endAt": null
+    },
+    {
+      "id": "agent-skill",
+      "title": "AI Agent Skill & Templates",
+      "content": "Publish portable `.agents/skills/ariadeck-mcp` skill and JSON board samples.",
+      "cardType": "idea",
+      "status": "done",
+      "tags": ["mcp", "dx"],
+      "posX": 1480,
+      "posY": 160,
+      "timelineOrder": 4,
+      "startAt": null,
+      "endAt": null
+    },
+    {
+      "id": "android-app",
+      "title": "Android Capacitor App",
+      "content": "Build touch-safe relation map, mobile timeline, and multimodal photo/voice capture.",
+      "cardType": "task",
+      "status": "todo",
+      "tags": ["phase4", "android"],
+      "posX": 1480,
+      "posY": 420,
+      "timelineOrder": 4,
+      "startAt": null,
+      "endAt": null
+    }
+  ],
+  "edges": [
+    {
+      "sourceCardId": "init-monorepo",
+      "targetCardId": "core-storage",
+      "relationType": "blocks"
+    },
+    {
+      "sourceCardId": "arch-specs",
+      "targetCardId": "core-storage",
+      "relationType": "blocks"
+    },
+    {
+      "sourceCardId": "core-storage",
+      "targetCardId": "dag-service",
+      "relationType": "blocks"
+    },
+    {
+      "sourceCardId": "core-storage",
+      "targetCardId": "timeline-engine",
+      "relationType": "blocks"
+    },
+    {
+      "sourceCardId": "dag-service",
+      "targetCardId": "mcp-server",
+      "relationType": "blocks"
+    },
+    {
+      "sourceCardId": "dag-service",
+      "targetCardId": "desktop-ui",
+      "relationType": "blocks"
+    },
+    {
+      "sourceCardId": "timeline-engine",
+      "targetCardId": "desktop-ui",
+      "relationType": "blocks"
+    },
+    {
+      "sourceCardId": "dag-service",
+      "targetCardId": "sync-export",
+      "relationType": "blocks"
+    },
+    {
+      "sourceCardId": "mcp-server",
+      "targetCardId": "agent-skill",
+      "relationType": "causes",
+      "label": "enables"
+    },
+    {
+      "sourceCardId": "mcp-server",
+      "targetCardId": "android-app",
+      "relationType": "blocks"
+    },
+    {
+      "sourceCardId": "sync-export",
+      "targetCardId": "android-app",
+      "relationType": "blocks"
+    },
+    {
+      "sourceCardId": "desktop-ui",
+      "targetCardId": "agent-skill",
+      "relationType": "relates_to",
+      "label": "shared JSON"
+    },
+    {
+      "sourceCardId": "desktop-ui",
+      "targetCardId": "android-app",
+      "relationType": "relates_to",
+      "label": "shared core"
+    }
+  ],
+  "attachments": []
+}

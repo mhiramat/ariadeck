@@ -2,6 +2,22 @@
 
 **Ariadeck** is a spatial and temporal organization tool for tasks, ideas, and story plots. Organize thoughts as cards on a modeless dependency graph (DAG), edit them seamlessly, and collaborate in real time with AI agents through a native Model Context Protocol (MCP) server.
 
+## Screenshots
+
+The examples below are rendered from the importable sample board [`docs/samples/ariadeck-roadmap.json`](docs/samples/ariadeck-roadmap.json) (try **Ariadeck menu -> Import JSON** in the Desktop UI).
+
+### Graph View
+
+Modeless dependency canvas with strong ordering links (`blocks` / `causes` via horizontal handles), weak associations (`relates_to` via top/bottom dashed handles), Bezier-aware **Auto-Layout**, and a viewport-highlighted MiniMap.
+
+![Ariadeck Graph View Sample](docs/images/sample-graph.png)
+
+### Timeline View
+
+Horizontal topological sequence automatically grouped by dependency depth (`Step 0`–`Step 4`), with prerequisite/dependent counts, drag-and-drop reordering, and real-time dependency violation checks.
+
+![Ariadeck Timeline View Sample](docs/images/sample-timeline.png)
+
 ## Architecture
 
 Ariadeck is organized as a TypeScript `pnpm` monorepo:
