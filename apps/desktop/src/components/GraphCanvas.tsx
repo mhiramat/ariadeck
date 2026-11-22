@@ -16,7 +16,11 @@ import {
 import '@xyflow/react/dist/style.css';
 import type { CardType } from '@ariadeck/core';
 import { useBoardStore } from '../store/useBoardStore.ts';
-import { computeAutoGraphLayout } from '../utils/autoLayout.ts';
+import {
+  computeAutoGraphLayout,
+  resolveEdgeHandles,
+  type CardDimensions,
+} from '../utils/autoLayout.ts';
 import { IdeaCardNode, type IdeaCardFlowNode } from './IdeaCardNode.tsx';
 import { DependencyEdge, type DependencyFlowEdge } from './DependencyEdge.tsx';
 import { CanvasQuickToolbar } from './CanvasQuickToolbar.tsx';
@@ -101,28 +105,11 @@ function GraphCanvasInner() {
     const cardPosById = new Map(graph.cards.map((c) => [c.id, { x: c.posX, y: c.posY }]));
 
     return graph.edges.map((edge) => {
-      let sourceHandle = 'right';
-      let targetHandle = 'left';
-
-      if (edge.relationType === 'relates_to') {
-        const srcPos = cardPosById.get(edge.sourceCardId);
-        const tgtPos = cardPosById.get(edge.targetCardId);
-        if (srcPos && tgtPos) {
-          if (srcPos.y + 40 < tgtPos.y) {
-            sourceHandle = 'bottom';
-            targetHandle = 'top';
-          } else if (srcPos.y > tgtPos.y + 40) {
-            sourceHandle = 'top';
-            targetHandle = 'bottom';
-          } else {
-            sourceHandle = 'top';
-            targetHandle = 'top';
-          }
-        } else {
-          sourceHandle = 'bottom';
-          targetHandle = 'top';
-        }
-      }
+      const { sourceHandle, targetHandle } = resolveEdgeHandles(
+        edge.relationType,
+        cardPosById.get(edge.sourceCardId),
+        cardPosById.get(edge.targetCardId)
+      );
 
       const strokeColor = edge.isConflicted
         ? '#f43f5e'
@@ -224,7 +211,16 @@ function GraphCanvasInner() {
 
   const handleAutoLayout = useCallback(async () => {
     if (!graph || graph.cards.length === 0) return;
-    const positions = computeAutoGraphLayout(graph.cards, graph.edges);
+    const measuredDimensions = new Map<string, CardDimensions>();
+    for (const node of nodes) {
+      if (node.measured?.width && node.measured?.height) {
+        measuredDimensions.set(node.id, {
+          width: node.measured.width,
+          height: node.measured.height,
+        });
+      }
+    }
+    const positions = computeAutoGraphLayout(graph.cards, graph.edges, measuredDimensions);
     const posMap = new Map(positions.map((p) => [p.cardId, p]));
 
     // Update UI immediately for snappy feedback
@@ -244,7 +240,7 @@ function GraphCanvasInner() {
       void fitView({ padding: 0.2, duration: 300 });
     });
     pushToast('success', 'Graph layout arranged by dependency order.');
-  }, [graph, setNodes, updateCard, fitView, pushToast]);
+  }, [graph, nodes, setNodes, updateCard, fitView, pushToast]);
 
   return (
     <div
