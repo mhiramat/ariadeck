@@ -121,4 +121,26 @@ describe('useBoardStore', () => {
     expect(store.getState().toasts.some((t) => t.kind === 'info' && t.message.includes('card:split'))).toBe(true);
     unsubscribe();
   });
+
+  it('auto-authenticates using #token= URL fragment and strips it from location hash', async () => {
+    const board = makeBoard();
+    const graph: BoardGraph = { board, cards: [], edges: [], attachments: [] };
+
+    window.history.replaceState(null, '', '/#token=fragment-secret-token');
+
+    const api = {
+      getAuthStatus: vi.fn().mockResolvedValue({ authRequired: true, authenticated: false }),
+      login: vi.fn().mockResolvedValue({ authRequired: true, authenticated: true }),
+      listBoards: vi.fn().mockResolvedValue([board]),
+      getBoardGraph: vi.fn().mockResolvedValue(graph),
+    } as unknown as AriadeckApiClient;
+
+    const store = createBoardStore(api);
+    await store.getState().initialize();
+
+    expect(api.login).toHaveBeenCalledWith('fragment-secret-token');
+    expect(window.location.hash).toBe('');
+    expect(store.getState().authenticated).toBe(true);
+    expect(store.getState().activeBoardId).toBe('board-1');
+  });
 });

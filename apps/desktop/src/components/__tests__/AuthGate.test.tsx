@@ -32,4 +32,25 @@ describe('AuthGate', () => {
     render(<AuthGate />);
     expect(screen.getByRole('alert')).toHaveTextContent('Invalid access token.');
   });
+
+  it('loads and submits an access token from a selected token file', async () => {
+    const loginSpy = vi.fn().mockResolvedValue(true);
+    useBoardStore.setState({ login: loginSpy });
+
+    render(<AuthGate />);
+
+    const fileInput = screen.getByLabelText('Load token from file') as HTMLInputElement;
+    const tokenFile = new File(['file-based-secret-token\n'], 'auth-token', {
+      type: 'text/plain',
+    });
+    Object.defineProperty(tokenFile, 'text', {
+      value: vi.fn().mockResolvedValue('file-based-secret-token\n'),
+    });
+
+    fireEvent.change(fileInput, { target: { files: [tokenFile] } });
+
+    await waitFor(() => {
+      expect(loginSpy).toHaveBeenCalledWith('file-based-secret-token');
+    });
+  });
 });

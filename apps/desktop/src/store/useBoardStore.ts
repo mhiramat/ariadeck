@@ -111,6 +111,28 @@ export interface BoardStoreState {
   dismissToast: (id: string) => void;
 }
 
+export function consumeUrlFragmentToken(): string | null {
+  if (typeof window === 'undefined' || !window.location?.hash) {
+    return null;
+  }
+  const rawHash = window.location.hash.startsWith('#')
+    ? window.location.hash.slice(1)
+    : window.location.hash;
+  if (!rawHash) return null;
+
+  const params = new URLSearchParams(rawHash);
+  const token = params.get('token')?.trim();
+  if (!token) return null;
+
+  params.delete('token');
+  const nextHash = params.toString();
+  const nextUrl =
+    `${window.location.pathname}${window.location.search}` +
+    (nextHash ? `#${nextHash}` : '');
+  window.history.replaceState(null, '', nextUrl);
+  return token;
+}
+
 export function createBoardStore(api: AriadeckApiClient = createAriadeckApiClient()) {
   let toastSeq = 1;
 
@@ -148,8 +170,27 @@ export function createBoardStore(api: AriadeckApiClient = createAriadeckApiClien
     initialize: async () => {
       set({ loading: true, authError: null });
       try {
+        const fragmentToken = consumeUrlFragmentToken();
+
         if (typeof api.getAuthStatus === 'function') {
-          const authStatus = await api.getAuthStatus();
+          let authStatus = await api.getAuthStatus();
+          if (authStatus.authRequired && !authStatus.authenticated && fragmentToken) {
+            try {
+              authStatus = await api.login(fragmentToken);
+            } catch (error) {
+              set({
+                authRequired: true,
+                authenticated: false,
+                authError:
+                  error instanceof Error
+                    ? error.message
+                    : 'Authentication with URL token failed.',
+                loading: false,
+                connectionStatus: 'disconnected',
+              });
+              return;
+            }
+          }
           set({
             authRequired: authStatus.authRequired,
             authenticated: authStatus.authenticated,
