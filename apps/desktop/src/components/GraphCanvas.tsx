@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, type MouseEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, type MouseEvent } from 'react';
 import {
   Background,
   ConnectionMode,
@@ -46,6 +46,7 @@ function GraphCanvasInner() {
   const pushToast = useBoardStore((s) => s.pushToast);
 
   const [nodes, setNodes, onNodesChange] = useNodesState<IdeaCardFlowNode>([]);
+  const lastFittedBoardIdRef = useRef<string | null>(null);
 
   const handleRename = useCallback(
     (cardId: string, title: string) => {
@@ -98,7 +99,16 @@ function GraphCanvasInner() {
         };
       });
     });
-  }, [graph, selectedCardId, handleRename, setNodes]);
+
+    if (lastFittedBoardIdRef.current !== graph.board.id) {
+      lastFittedBoardIdRef.current = graph.board.id;
+      if (graph.cards.length > 0) {
+        requestAnimationFrame(() => {
+          void fitView({ padding: 0.25, duration: 250 });
+        });
+      }
+    }
+  }, [graph, selectedCardId, handleRename, setNodes, fitView]);
 
   const edges: DependencyFlowEdge[] = useMemo(() => {
     if (!graph) return [];

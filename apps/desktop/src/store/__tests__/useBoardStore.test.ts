@@ -143,4 +143,56 @@ describe('useBoardStore', () => {
     expect(store.getState().authenticated).toBe(true);
     expect(store.getState().activeBoardId).toBe('board-1');
   });
+
+  it('does not let a stale in-flight refresh overwrite a newly imported board graph', async () => {
+    const emptyBoard = makeBoard('board-empty');
+    const emptyGraph: BoardGraph = { board: emptyBoard, cards: [], edges: [], attachments: [] };
+
+    const importedBoard = makeBoard('board-imported');
+    importedBoard.title = 'Imported Roadmap';
+    const importedGraph: BoardGraph = {
+      board: importedBoard,
+      cards: [makeCard('c1', 'Imported Task 1'), makeCard('c2', 'Imported Task 2')],
+      edges: [],
+      attachments: [],
+    };
+
+    let resolveStaleRefresh!: (g: BoardGraph) => void;
+    const staleRefreshPromise = new Promise<BoardGraph>((resolve) => {
+      resolveStaleRefresh = resolve;
+    });
+
+    let getGraphCalls = 0;
+    const api = {
+      listBoards: vi.fn().mockResolvedValue([emptyBoard, importedBoard]),
+      getBoardGraph: vi.fn().mockImplementation((id: string) => {
+        getGraphCalls += 1;
+        if (id === 'board-empty' && getGraphCalls === 1) {
+          return Promise.resolve(emptyGraph);
+        }
+        if (id === 'board-empty') {
+          return staleRefreshPromise;
+        }
+        return Promise.resolve(importedGraph);
+      }),
+      importBoardJson: vi.fn().mockResolvedValue(importedGraph),
+    } as unknown as AriadeckApiClient;
+
+    const store = createBoardStore(api);
+    await store.getState().initialize();
+    expect(store.getState().activeBoardId).toBe('board-empty');
+
+    // Simulate an SSE-triggered refreshActiveBoard for board-empty starting right before importJson
+    const inFlightRefresh = store.getState().refreshActiveBoard();
+    await store.getState().importJson('{"format":"ariadeck-board"}');
+
+    // Now the stale refresh for board-empty resolves AFTER importJson completed
+    resolveStaleRefresh(emptyGraph);
+    await inFlightRefresh;
+
+    // The newly imported board and its cards must remain active and intact
+    expect(store.getState().activeBoardId).toBe('board-imported');
+    expect(store.getState().graph?.board.id).toBe('board-imported');
+    expect(store.getState().graph?.cards).toHaveLength(2);
+  });
 });

@@ -135,6 +135,7 @@ export function consumeUrlFragmentToken(): string | null {
 
 export function createBoardStore(api: AriadeckApiClient = createAriadeckApiClient()) {
   let toastSeq = 1;
+  let boardSwitchSeq = 0;
 
   return create<BoardStoreState>((set, get) => ({
     boards: [],
@@ -277,11 +278,14 @@ export function createBoardStore(api: AriadeckApiClient = createAriadeckApiClien
     },
 
     selectBoard: async (boardId) => {
+      const switchId = ++boardSwitchSeq;
       set({ loading: true, selectedCardId: null });
       try {
         const graph = await api.getBoardGraph(boardId);
+        if (switchId !== boardSwitchSeq) return;
         set({ activeBoardId: boardId, graph, loading: false });
       } catch (error) {
+        if (switchId !== boardSwitchSeq) return;
         set({ loading: false });
         get().pushToast(
           'error',
@@ -358,20 +362,28 @@ export function createBoardStore(api: AriadeckApiClient = createAriadeckApiClien
     setBoardListOpen: (open) => set({ boardListOpen: open }),
 
     refreshActiveBoard: async () => {
-      const { activeBoardId, selectedCardId } = get();
+      const requestedBoardId = get().activeBoardId;
+      const switchId = boardSwitchSeq;
       try {
         const boards = await api.listBoards();
-        if (!activeBoardId) {
+        if (!requestedBoardId) {
           set({ boards });
           return;
         }
-        const graph = await api.getBoardGraph(activeBoardId);
+        const graph = await api.getBoardGraph(requestedBoardId);
+        // Ignore stale graph responses if the user switched/imported another board while in flight
+        if (get().activeBoardId !== requestedBoardId || switchId !== boardSwitchSeq) {
+          set({ boards });
+          return;
+        }
+        const currentSelectedCardId = get().selectedCardId;
         const stillExists =
-          selectedCardId !== null && graph.cards.some((c) => c.id === selectedCardId);
+          currentSelectedCardId !== null &&
+          graph.cards.some((c) => c.id === currentSelectedCardId);
         set({
           boards,
           graph,
-          selectedCardId: stillExists ? selectedCardId : null,
+          selectedCardId: stillExists ? currentSelectedCardId : null,
         });
       } catch {
         // Ignore transient refresh failures.
@@ -606,20 +618,28 @@ export function createBoardStore(api: AriadeckApiClient = createAriadeckApiClien
     },
 
     importJson: async (jsonText) => {
+      const switchId = ++boardSwitchSeq;
       try {
-        const graph = await api.importBoardJson(jsonText);
-        const boards = await api.listBoards();
+        const imported = await api.importBoardJson(jsonText);
+        const [boards, freshGraph] = await Promise.all([
+          api.listBoards(),
+          api.getBoardGraph(imported.board.id).catch(() => imported),
+        ]);
+        if (switchId !== boardSwitchSeq) {
+          set({ boards });
+          return freshGraph;
+        }
         set({
           boards,
-          activeBoardId: graph.board.id,
-          graph,
+          activeBoardId: freshGraph.board.id,
+          graph: freshGraph,
           selectedCardId: null,
         });
         get().pushToast(
           'success',
-          `Imported "${graph.board.title}" (${graph.cards.length} cards, ${graph.edges.length} edges).`
+          `Imported "${freshGraph.board.title}" (${freshGraph.cards.length} cards, ${freshGraph.edges.length} edges).`
         );
-        return graph;
+        return freshGraph;
       } catch (error) {
         get().pushToast(
           'error',
@@ -634,7 +654,14 @@ export function createBoardStore(api: AriadeckApiClient = createAriadeckApiClien
         onConnected: () => set({ connectionStatus: 'connected' }),
         onError: () => set({ connectionStatus: 'disconnected' }),
         onEvent: (event: GraphEvent) => {
-          void get().refreshActiveBoard();
+          if (event.boardId && event.boardId !== get().activeBoardId) {
+            void api
+              .listBoards()
+              .then((boards) => set({ boards }))
+              .catch(() => undefined);
+          } else {
+            void get().refreshActiveBoard();
+          }
           if (event.deviceId === 'ariadeck-mcp-server') {
             get().pushToast('info', `AI agent updated the board (${event.type}).`);
           }
