@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, type MouseEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import {
   Background,
   ConnectionMode,
@@ -14,10 +14,17 @@ import {
   type OnNodeDrag,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import type { CardType } from '@ariadeck/core';
+import type {
+  BoardType,
+  CardType,
+  EdgeDirection,
+  EdgeStyleVariant,
+  RelationType,
+} from '@ariadeck/core';
 import { useBoardStore } from '../store/useBoardStore.ts';
 import {
   computeAutoGraphLayout,
+  computeForceDirectedLayout,
   resolveEdgeHandles,
   type CardDimensions,
 } from '../utils/autoLayout.ts';
@@ -46,7 +53,11 @@ function GraphCanvasInner() {
   const pushToast = useBoardStore((s) => s.pushToast);
 
   const [nodes, setNodes, onNodesChange] = useNodesState<IdeaCardFlowNode>([]);
+  const [flatEdgeDirection, setFlatEdgeDirection] = useState<EdgeDirection>('directed');
+  const [jumpBackMode, setJumpBackMode] = useState(false);
   const lastFittedBoardIdRef = useRef<string | null>(null);
+
+  const boardType: BoardType = graph?.board.boardType ?? 'flow';
 
   const handleRename = useCallback(
     (cardId: string, title: string) => {
@@ -56,7 +67,15 @@ function GraphCanvasInner() {
   );
 
   const handleUpdateEdge = useCallback(
-    (edgeId: string, patch: { relationType: 'blocks' | 'causes' | 'relates_to'; label: string | null }) => {
+    (
+      edgeId: string,
+      patch: {
+        relationType: RelationType;
+        direction?: EdgeDirection;
+        styleVariant?: EdgeStyleVariant;
+        label: string | null;
+      }
+    ) => {
       void updateEdge(edgeId, patch);
     },
     [updateEdge]
@@ -118,14 +137,29 @@ function GraphCanvasInner() {
       const { sourceHandle, targetHandle } = resolveEdgeHandles(
         edge.relationType,
         cardPosById.get(edge.sourceCardId),
-        cardPosById.get(edge.targetCardId)
+        cardPosById.get(edge.targetCardId),
+        boardType
       );
 
+      const direction = edge.direction ?? 'directed';
       const strokeColor = edge.isConflicted
         ? '#f43f5e'
-        : edge.relationType === 'relates_to'
-          ? '#2dd4bf'
-          : '#818cf8';
+        : edge.color
+          ? edge.color
+          : edge.relationType === 'jump_back'
+            ? '#f59e0b'
+            : edge.relationType === 'relates_to'
+              ? '#2dd4bf'
+              : direction === 'bidirectional'
+                ? '#f43f5e'
+                : direction === 'undirected'
+                  ? '#94a3b8'
+                  : '#818cf8';
+
+      const arrowMarker = {
+        type: MarkerType.ArrowClosed,
+        color: strokeColor,
+      };
 
       return {
         id: edge.id,
@@ -134,12 +168,14 @@ function GraphCanvasInner() {
         sourceHandle,
         targetHandle,
         type: 'dependency',
-        markerEnd: {
-          type: MarkerType.ArrowClosed,
-          color: strokeColor,
-        },
+        ...(direction === 'bidirectional' ? { markerStart: arrowMarker } : {}),
+        ...(direction !== 'undirected' ? { markerEnd: arrowMarker } : {}),
         data: {
+          boardType,
           relationType: edge.relationType,
+          direction,
+          styleVariant: edge.styleVariant,
+          color: edge.color,
           label: edge.label,
           isConflicted: edge.isConflicted,
           onUpdate: handleUpdateEdge,
@@ -147,24 +183,38 @@ function GraphCanvasInner() {
         },
       };
     });
-  }, [graph, handleUpdateEdge, handleDeleteEdge]);
+  }, [graph, boardType, handleUpdateEdge, handleDeleteEdge]);
 
   const onConnect = useCallback(
     (connection: Connection) => {
-      if (connection.source && connection.target) {
-        const isVerticalHandle =
-          connection.sourceHandle === 'top' ||
-          connection.sourceHandle === 'bottom' ||
-          connection.targetHandle === 'top' ||
-          connection.targetHandle === 'bottom';
-        void connectCards(
-          connection.source,
-          connection.target,
-          isVerticalHandle ? 'relates_to' : 'blocks'
-        );
+      if (!connection.source || !connection.target) return;
+
+      if (boardType === 'flat') {
+        void connectCards(connection.source, connection.target, 'relates_to', {
+          direction: flatEdgeDirection,
+        });
+        return;
       }
+
+      if (jumpBackMode) {
+        void connectCards(connection.source, connection.target, 'jump_back', {
+          styleVariant: 'dashed',
+        });
+        return;
+      }
+
+      const isVerticalHandle =
+        connection.sourceHandle === 'top' ||
+        connection.sourceHandle === 'bottom' ||
+        connection.targetHandle === 'top' ||
+        connection.targetHandle === 'bottom';
+      void connectCards(
+        connection.source,
+        connection.target,
+        isVerticalHandle ? 'relates_to' : 'blocks'
+      );
     },
-    [connectCards]
+    [boardType, flatEdgeDirection, jumpBackMode, connectCards]
   );
 
   const onNodeDragStop: OnNodeDrag<IdeaCardFlowNode> = useCallback(
@@ -187,7 +237,6 @@ function GraphCanvasInner() {
   const handlePaneDoubleClick = useCallback(
     (event: MouseEvent<HTMLDivElement>) => {
       const target = event.target as HTMLElement;
-      // Ignore double-clicks on cards, edges, controls, minimap, or floating toolbar
       if (
         target.closest(
           '.react-flow__node, .react-flow__edge, .react-flow__controls, .react-flow__minimap, .react-flow__panel, button, input, textarea'
@@ -230,10 +279,12 @@ function GraphCanvasInner() {
         });
       }
     }
-    const positions = computeAutoGraphLayout(graph.cards, graph.edges, measuredDimensions);
+    const positions =
+      boardType === 'flat'
+        ? computeForceDirectedLayout(graph.cards, graph.edges, measuredDimensions)
+        : computeAutoGraphLayout(graph.cards, graph.edges, measuredDimensions);
     const posMap = new Map(positions.map((p) => [p.cardId, p]));
 
-    // Update UI immediately for snappy feedback
     setNodes((prev) =>
       prev.map((node) => {
         const next = posMap.get(node.id);
@@ -241,7 +292,6 @@ function GraphCanvasInner() {
       })
     );
 
-    // Persist coordinates to backend
     await Promise.all(
       positions.map((p) => updateCard(p.cardId, { posX: p.posX, posY: p.posY }))
     );
@@ -249,8 +299,13 @@ function GraphCanvasInner() {
     requestAnimationFrame(() => {
       void fitView({ padding: 0.2, duration: 300 });
     });
-    pushToast('success', 'Graph layout arranged by dependency order.');
-  }, [graph, nodes, setNodes, updateCard, fitView, pushToast]);
+    pushToast(
+      'success',
+      boardType === 'flat'
+        ? 'Relationship map arranged with force-directed layout.'
+        : 'Graph layout arranged by dependency order.'
+    );
+  }, [graph, boardType, nodes, setNodes, updateCard, fitView, pushToast]);
 
   return (
     <div
@@ -278,8 +333,8 @@ function GraphCanvasInner() {
         <MiniMap
           pannable
           zoomable
-          nodeColor="#6366f1"
-          nodeStrokeColor="#a5b4fc"
+          nodeColor={boardType === 'flat' ? '#10b981' : '#6366f1'}
+          nodeStrokeColor={boardType === 'flat' ? '#6ee7b7' : '#a5b4fc'}
           nodeBorderRadius={4}
           maskColor="rgba(2, 6, 23, 0.72)"
           maskStrokeColor="#38bdf8"
@@ -290,6 +345,11 @@ function GraphCanvasInner() {
       </ReactFlow>
 
       <CanvasQuickToolbar
+        boardType={boardType}
+        flatEdgeDirection={flatEdgeDirection}
+        onFlatEdgeDirectionChange={setFlatEdgeDirection}
+        jumpBackMode={jumpBackMode}
+        onToggleJumpBackMode={() => setJumpBackMode((prev) => !prev)}
         onCreateCard={handleQuickCreate}
         onAutoLayout={() => void handleAutoLayout()}
         hasCards={(graph?.cards.length ?? 0) > 0}

@@ -55,6 +55,7 @@ describe('DependencyEdge inline label editing', () => {
 
     expect(onUpdate).toHaveBeenCalledWith('edge-1', {
       relationType: 'causes',
+      styleVariant: 'solid',
       label: 'triggers event',
     });
   });

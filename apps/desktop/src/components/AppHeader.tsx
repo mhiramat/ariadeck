@@ -17,6 +17,7 @@ import {
   LogOut,
   ChevronDown,
 } from 'lucide-react';
+import type { BoardType } from '@ariadeck/core';
 import { useBoardStore } from '../store/useBoardStore.ts';
 
 export function AppHeader() {
@@ -45,12 +46,15 @@ export function AppHeader() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [creatingBoard, setCreatingBoard] = useState(false);
   const [newBoardTitle, setNewBoardTitle] = useState('');
+  const [newBoardType, setNewBoardType] = useState<BoardType>('flow');
   const [renamingBoard, setRenamingBoard] = useState(false);
   const [renameTitle, setRenameTitle] = useState('');
   const menuRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const activeBoard = boards.find((b) => b.id === activeBoardId) ?? null;
+  const activeBoardType: BoardType = activeBoard?.boardType ?? 'flow';
+  const isFlatBoard = activeBoardType === 'flat';
 
   // Close the brand dropdown menu on outside click or Escape
   useEffect(() => {
@@ -77,8 +81,9 @@ export function AppHeader() {
     e.preventDefault();
     const title = newBoardTitle.trim();
     if (!title) return;
-    await createBoard(title);
+    await createBoard(title, '', newBoardType);
     setNewBoardTitle('');
+    setNewBoardType('flow');
     setCreatingBoard(false);
   };
 
@@ -246,8 +251,17 @@ export function AppHeader() {
                 value={newBoardTitle}
                 onChange={(e) => setNewBoardTitle(e.target.value)}
                 autoFocus
-                className="w-44 rounded-lg border border-indigo-500 bg-slate-800 px-2.5 py-1 text-xs text-white outline-none"
+                className="w-40 rounded-lg border border-indigo-500 bg-slate-800 px-2.5 py-1 text-xs text-white outline-none"
               />
+              <select
+                aria-label="New board type"
+                value={newBoardType}
+                onChange={(e) => setNewBoardType(e.target.value as BoardType)}
+                className="rounded-lg border border-slate-700 bg-slate-800 px-2 py-1 text-xs text-slate-200 outline-none focus:border-indigo-500"
+              >
+                <option value="flow">Flow</option>
+                <option value="flat">Flat</option>
+              </select>
               <button
                 type="submit"
                 className="rounded-lg bg-indigo-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-indigo-500"
@@ -308,18 +322,29 @@ export function AppHeader() {
               </select>
 
               {activeBoard && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setRenameTitle(activeBoard.title);
-                    setRenamingBoard(true);
-                  }}
-                  aria-label="Rename current board"
-                  title="Rename current board"
-                  className="rounded-lg border border-slate-700 bg-slate-800 p-1.5 text-slate-300 transition hover:border-indigo-500 hover:text-white"
-                >
-                  <Pencil className="h-3.5 w-3.5" />
-                </button>
+                <>
+                  <span
+                    className={`rounded-md border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                      isFlatBoard
+                        ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-300'
+                        : 'border-indigo-500/40 bg-indigo-500/15 text-indigo-300'
+                    }`}
+                  >
+                    {activeBoardType}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRenameTitle(activeBoard.title);
+                      setRenamingBoard(true);
+                    }}
+                    aria-label="Rename current board"
+                    title="Rename current board"
+                    className="rounded-lg border border-slate-700 bg-slate-800 p-1.5 text-slate-300 transition hover:border-indigo-500 hover:text-white"
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                  </button>
+                </>
               )}
             </>
           )}
@@ -350,8 +375,16 @@ export function AppHeader() {
             type="button"
             role="tab"
             aria-selected={viewMode === 'timeline'}
-            onClick={() => setViewMode('timeline')}
-            className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium transition ${
+            disabled={isFlatBoard}
+            title={
+              isFlatBoard
+                ? 'Timeline view is available for Flow boards'
+                : 'Switch to Timeline view'
+            }
+            onClick={() => {
+              if (!isFlatBoard) setViewMode('timeline');
+            }}
+            className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-40 ${
               viewMode === 'timeline'
                 ? 'bg-indigo-600 text-white shadow'
                 : 'text-slate-400 hover:text-slate-200'

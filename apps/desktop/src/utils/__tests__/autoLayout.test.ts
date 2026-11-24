@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import type { Card, Edge, RelationType } from '@ariadeck/core';
 import {
   computeAutoGraphLayout,
+  computeForceDirectedLayout,
   doesEdgeOccludeCard,
   type CardDimensions,
 } from '../autoLayout.ts';
@@ -188,5 +189,30 @@ describe('computeAutoGraphLayout', () => {
     const obs = { cardId: 'o', posX: 330, posY: 0 };
 
     expect(doesEdgeOccludeCard(src, tgt, obs, { relationType: 'blocks' })).toBe(true);
+  });
+
+  it('arranges cyclic flat boards with force-directed layout without card overlap', () => {
+    const cards = Array.from({ length: 5 }, (_, i) => makeCard(`f${i + 1}`, `Entity ${i + 1}`, i));
+    const edges: Edge[] = [
+      makeEdge('e1', 'f1', 'f2', 'relates_to'),
+      makeEdge('e2', 'f2', 'f3', 'relates_to'),
+      makeEdge('e3', 'f3', 'f4', 'relates_to'),
+      makeEdge('e4', 'f4', 'f5', 'relates_to'),
+      makeEdge('e5', 'f5', 'f1', 'relates_to'),
+      makeEdge('e6', 'f1', 'f3', 'custom'),
+    ];
+
+    const positions = computeForceDirectedLayout(cards, edges);
+    expect(positions).toHaveLength(5);
+
+    for (let i = 0; i < positions.length; i++) {
+      for (let j = i + 1; j < positions.length; j++) {
+        const a = positions[i]!;
+        const b = positions[j]!;
+        const overlapX = a.posX < b.posX + 256 && b.posX < a.posX + 256;
+        const overlapY = a.posY < b.posY + 128 && b.posY < a.posY + 128;
+        expect(overlapX && overlapY).toBe(false);
+      }
+    }
   });
 });

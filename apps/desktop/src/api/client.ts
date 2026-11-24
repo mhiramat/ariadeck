@@ -1,17 +1,23 @@
 import type {
   Board,
+  BoardConversionAnalysis,
+  BoardConversionStrategy,
   BoardGraph,
+  BoardType,
   Card,
   CardStatus,
   CardType,
   ConflictRecord,
   ConflictResolutionAction,
   Edge,
+  EdgeDirection,
+  EdgeStyleVariant,
   GraphEvent,
   JsonExportResult,
   MarkdownExportResult,
   RelationType,
   SplitCardResult,
+  SplitEdgeInheritance,
   SplitSubCardInput,
   SyncBoardResult,
   TimelineSortResult,
@@ -40,8 +46,12 @@ export interface AriadeckApiClient {
   login(token: string): Promise<AuthStatus>;
   logout(): Promise<AuthStatus>;
   listBoards(): Promise<Board[]>;
-  createBoard(input: { title: string; description?: string }): Promise<Board>;
+  createBoard(input: { title: string; description?: string; boardType?: BoardType }): Promise<Board>;
   updateBoard(boardId: string, patch: { title?: string; description?: string }): Promise<Board>;
+  convertBoardType(
+    boardId: string,
+    input: { targetType: BoardType; dryRun?: boolean; strategy?: BoardConversionStrategy }
+  ): Promise<{ board?: Board; analysis: BoardConversionAnalysis }>;
   deleteBoard(boardId: string): Promise<void>;
   getBoardGraph(boardId: string): Promise<BoardGraph>;
   createCard(input: {
@@ -75,16 +85,29 @@ export interface AriadeckApiClient {
     sourceCardId: string;
     targetCardId: string;
     relationType?: RelationType;
+    direction?: EdgeDirection;
     label?: string;
+    styleVariant?: EdgeStyleVariant;
+    color?: string | null;
   }): Promise<Edge>;
   updateEdge(
     edgeId: string,
-    patch: { relationType?: RelationType; label?: string | null }
+    patch: {
+      relationType?: RelationType;
+      direction?: EdgeDirection;
+      label?: string | null;
+      styleVariant?: EdgeStyleVariant;
+      color?: string | null;
+    }
   ): Promise<Edge>;
   disconnectCards(edgeId: string): Promise<void>;
   splitCard(
     cardId: string,
-    input: { subCards: SplitSubCardInput[]; linkMode: 'sequential' | 'parallel' }
+    input: {
+      subCards: SplitSubCardInput[];
+      linkMode?: 'sequential' | 'parallel';
+      edgeInheritance?: SplitEdgeInheritance;
+    }
   ): Promise<SplitCardResult>;
   computeTimelineLayout(boardId: string): Promise<TimelineSortResult>;
   exportBoardMarkdown(boardId: string, includeTranscripts?: boolean): Promise<MarkdownExportResult>;
@@ -170,6 +193,14 @@ export function createAriadeckApiClient(baseUrl = ''): AriadeckApiClient {
     deleteBoard: async (boardId) => {
       await request<void>(`/api/boards/${boardId}`, { method: 'DELETE' });
     },
+    convertBoardType: (boardId, input) =>
+      request<{ board?: Board; analysis: BoardConversionAnalysis }>(
+        `/api/boards/${boardId}/convert-type`,
+        {
+          method: 'POST',
+          body: JSON.stringify(input),
+        }
+      ),
     getBoardGraph: (boardId) => request<BoardGraph>(`/api/boards/${boardId}/graph`),
     createCard: async (input) => {
       const data = await request<{ card: Card }>('/api/cards', {

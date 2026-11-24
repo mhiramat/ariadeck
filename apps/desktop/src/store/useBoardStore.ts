@@ -1,12 +1,16 @@
 import { create } from 'zustand';
 import type {
   Board,
+  BoardConversionStrategy,
   BoardGraph,
+  BoardType,
   Card,
   CardStatus,
   CardType,
   ConflictRecord,
   ConflictResolutionAction,
+  EdgeDirection,
+  EdgeStyleVariant,
   GraphEvent,
   JsonExportResult,
   MarkdownExportResult,
@@ -46,11 +50,20 @@ export interface BoardStoreState {
   login: (token: string) => Promise<boolean>;
   logout: () => Promise<void>;
   selectBoard: (boardId: string) => Promise<void>;
-  createBoard: (title: string, description?: string) => Promise<Board | null>;
+  createBoard: (
+    title: string,
+    description?: string,
+    boardType?: BoardType
+  ) => Promise<Board | null>;
   updateBoard: (
     boardId: string,
     patch: { title?: string; description?: string }
   ) => Promise<Board | null>;
+  convertBoardType: (
+    boardId: string,
+    targetType: BoardType,
+    strategy?: BoardConversionStrategy
+  ) => Promise<boolean>;
   deleteBoard: (boardId: string) => Promise<void>;
   refreshActiveBoard: () => Promise<void>;
 
@@ -85,11 +98,23 @@ export interface BoardStoreState {
   connectCards: (
     sourceCardId: string,
     targetCardId: string,
-    relationType?: RelationType
+    relationType?: RelationType,
+    options?: {
+      direction?: EdgeDirection;
+      label?: string;
+      styleVariant?: EdgeStyleVariant;
+      color?: string | null;
+    }
   ) => Promise<void>;
   updateEdge: (
     edgeId: string,
-    patch: { relationType?: RelationType; label?: string | null }
+    patch: {
+      relationType?: RelationType;
+      direction?: EdgeDirection;
+      label?: string | null;
+      styleVariant?: EdgeStyleVariant;
+      color?: string | null;
+    }
   ) => Promise<void>;
   disconnectCards: (edgeId: string) => Promise<void>;
   splitCard: (
@@ -283,7 +308,9 @@ export function createBoardStore(api: AriadeckApiClient = createAriadeckApiClien
       try {
         const graph = await api.getBoardGraph(boardId);
         if (switchId !== boardSwitchSeq) return;
-        set({ activeBoardId: boardId, graph, loading: false });
+        const nextViewMode =
+          (graph.board.boardType ?? 'flow') === 'flat' ? 'graph' : get().viewMode;
+        set({ activeBoardId: boardId, graph, loading: false, viewMode: nextViewMode });
       } catch (error) {
         if (switchId !== boardSwitchSeq) return;
         set({ loading: false });
@@ -294,13 +321,20 @@ export function createBoardStore(api: AriadeckApiClient = createAriadeckApiClien
       }
     },
 
-    createBoard: async (title, description = '') => {
+    createBoard: async (title, description = '', boardType = 'flow') => {
       try {
-        const board = await api.createBoard({ title, description });
+        const board = await api.createBoard({ title, description, boardType });
         const boards = await api.listBoards();
         const graph = await api.getBoardGraph(board.id);
-        set({ boards, activeBoardId: board.id, graph, selectedCardId: null });
-        get().pushToast('success', `Created board "${board.title}".`);
+        const nextViewMode = boardType === 'flat' ? 'graph' : get().viewMode;
+        set({
+          boards,
+          activeBoardId: board.id,
+          graph,
+          selectedCardId: null,
+          viewMode: nextViewMode,
+        });
+        get().pushToast('success', `Created ${boardType} board "${board.title}".`);
         return board;
       } catch (error) {
         get().pushToast(
@@ -308,6 +342,25 @@ export function createBoardStore(api: AriadeckApiClient = createAriadeckApiClien
           error instanceof Error ? error.message : 'Failed to create board.'
         );
         return null;
+      }
+    },
+
+    convertBoardType: async (boardId, targetType, strategy = 'demote_incompatible') => {
+      try {
+        await api.convertBoardType(boardId, { targetType, strategy });
+        const boards = await api.listBoards();
+        const isCurrent = get().activeBoardId === boardId;
+        const graph = isCurrent ? await api.getBoardGraph(boardId) : get().graph;
+        const nextViewMode = isCurrent && targetType === 'flat' ? 'graph' : get().viewMode;
+        set({ boards, graph, viewMode: nextViewMode });
+        get().pushToast('success', `Converted board to "${targetType}" mode.`);
+        return true;
+      } catch (error) {
+        get().pushToast(
+          'error',
+          error instanceof Error ? error.message : 'Failed to convert board type.'
+        );
+        return false;
       }
     },
 
@@ -438,11 +491,17 @@ export function createBoardStore(api: AriadeckApiClient = createAriadeckApiClien
       }
     },
 
-    connectCards: async (sourceCardId, targetCardId, relationType = 'blocks') => {
+    connectCards: async (sourceCardId, targetCardId, relationType = 'blocks', options = {}) => {
       const boardId = get().activeBoardId;
       if (!boardId) return;
       try {
-        await api.connectCards({ boardId, sourceCardId, targetCardId, relationType });
+        await api.connectCards({
+          boardId,
+          sourceCardId,
+          targetCardId,
+          relationType,
+          ...options,
+        });
         await get().refreshActiveBoard();
       } catch (error) {
         get().pushToast(

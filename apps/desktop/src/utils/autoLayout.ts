@@ -1,4 +1,10 @@
-import { computeTopologicalSteps, type Card, type Edge, type RelationType } from '@ariadeck/core';
+import {
+  computeTopologicalSteps,
+  type BoardType,
+  type Card,
+  type Edge,
+  type RelationType,
+} from '@ariadeck/core';
 
 export interface CardLayoutPosition {
   cardId: string;
@@ -83,8 +89,26 @@ interface BezierOcclusionHit {
 export function resolveEdgeHandles(
   relationType: RelationType,
   srcPos: { x: number; y: number } | undefined,
-  tgtPos: { x: number; y: number } | undefined
+  tgtPos: { x: number; y: number } | undefined,
+  boardType: BoardType = 'flow'
 ): EdgeHandlePair {
+  if (boardType === 'flat' && srcPos && tgtPos) {
+    const dx = tgtPos.x - srcPos.x;
+    const dy = tgtPos.y - srcPos.y;
+    if (Math.abs(dx) >= Math.abs(dy)) {
+      return dx >= 0
+        ? { sourceHandle: 'right', targetHandle: 'left' }
+        : { sourceHandle: 'left', targetHandle: 'right' };
+    }
+    return dy >= 0
+      ? { sourceHandle: 'bottom', targetHandle: 'top' }
+      : { sourceHandle: 'top', targetHandle: 'bottom' };
+  }
+
+  if (relationType === 'jump_back') {
+    return { sourceHandle: 'bottom', targetHandle: 'bottom' };
+  }
+
   if (relationType !== 'relates_to') {
     return { sourceHandle: 'right', targetHandle: 'left' };
   }
@@ -855,4 +879,142 @@ export function computeAutoGraphLayout(
   }
 
   return activeCards.map((c) => posById.get(c.id)!);
+}
+
+/**
+ * Computes a deterministic force-directed layout for flat relationship boards
+ * (many-body repulsion + spring attraction + bounding-box collision resolution)
+ * so cyclic and non-temporal networks untangle cleanly without overlapping cards.
+ */
+export function computeForceDirectedLayout(
+  cards: Card[],
+  edges: Edge[],
+  nodeDimensions?: ReadonlyMap<string, CardDimensions>
+): CardLayoutPosition[] {
+  const activeCards = cards.filter((c) => c.deletedAt === null);
+  if (activeCards.length === 0) return [];
+  if (activeCards.length === 1) {
+    return [{ cardId: activeCards[0]!.id, posX: START_X, posY: BASELINE_Y }];
+  }
+
+  const dimsById = new Map<string, CardDimensions>();
+  for (const card of activeCards) {
+    dimsById.set(card.id, estimateCardDimensions(card, nodeDimensions));
+  }
+
+  // Deterministic circular initial placement to prevent symmetry deadlocks
+  const n = activeCards.length;
+  const radius = Math.max(240, n * 65);
+  const state = activeCards.map((card, i) => {
+    const angle = (2 * Math.PI * i) / n;
+    return {
+      id: card.id,
+      x: Math.cos(angle) * radius,
+      y: Math.sin(angle) * radius,
+      vx: 0,
+      vy: 0,
+      w: dimsById.get(card.id)!.width,
+      h: dimsById.get(card.id)!.height,
+    };
+  });
+  const byId = new Map(state.map((s) => [s.id, s]));
+
+  const activeEdges = edges.filter(
+    (e) =>
+      e.deletedAt === null &&
+      byId.has(e.sourceCardId) &&
+      byId.has(e.targetCardId) &&
+      e.sourceCardId !== e.targetCardId
+  );
+
+  const REPULSION = 180000;
+  const SPRING_LENGTH = 360;
+  const SPRING_K = 0.04;
+  const CENTER_GRAVITY = 0.012;
+  const DAMPING = 0.82;
+  const COLLISION_PAD = 36;
+
+  for (let iter = 0; iter < 160; iter++) {
+    // 1. Pairwise Coulomb repulsion
+    for (let i = 0; i < state.length; i++) {
+      for (let j = i + 1; j < state.length; j++) {
+        const a = state[i]!;
+        const b = state[j]!;
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const distSq = dx * dx + dy * dy + 100;
+        const dist = Math.sqrt(distSq);
+        const force = REPULSION / distSq;
+        const fx = (dx / dist) * force;
+        const fy = (dy / dist) * force;
+        a.vx -= fx;
+        a.vy -= fy;
+        b.vx += fx;
+        b.vy += fy;
+      }
+    }
+
+    // 2. Spring attraction along edges
+    for (const edge of activeEdges) {
+      const a = byId.get(edge.sourceCardId)!;
+      const b = byId.get(edge.targetCardId)!;
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const dist = Math.max(1, Math.hypot(dx, dy));
+      const disp = dist - SPRING_LENGTH;
+      const fx = (dx / dist) * disp * SPRING_K;
+      const fy = (dy / dist) * disp * SPRING_K;
+      a.vx += fx;
+      a.vy += fy;
+      b.vx -= fx;
+      b.vy -= fy;
+    }
+
+    // 3. Mild centering force + velocity integration
+    for (const node of state) {
+      node.vx = (node.vx - node.x * CENTER_GRAVITY) * DAMPING;
+      node.vy = (node.vy - node.y * CENTER_GRAVITY) * DAMPING;
+      node.x += Math.max(-80, Math.min(80, node.vx));
+      node.y += Math.max(-80, Math.min(80, node.vy));
+    }
+
+    // 4. Axis-aligned bounding-box collision pushout
+    for (let i = 0; i < state.length; i++) {
+      for (let j = i + 1; j < state.length; j++) {
+        const a = state[i]!;
+        const b = state[j]!;
+        const minDx = (a.w + b.w) / 2 + COLLISION_PAD;
+        const minDy = (a.h + b.h) / 2 + COLLISION_PAD;
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const overlapX = minDx - Math.abs(dx);
+        const overlapY = minDy - Math.abs(dy);
+        if (overlapX > 0 && overlapY > 0) {
+          if (overlapX < overlapY) {
+            const push = (overlapX / 2) * (dx >= 0 ? 1 : -1);
+            a.x -= push;
+            b.x += push;
+          } else {
+            const push = (overlapY / 2) * (dy >= 0 ? 1 : -1);
+            a.y -= push;
+            b.y += push;
+          }
+        }
+      }
+    }
+  }
+
+  // Normalize top-left origin to (START_X, BASELINE_Y)
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  for (const node of state) {
+    if (node.x < minX) minX = node.x;
+    if (node.y < minY) minY = node.y;
+  }
+
+  return state.map((node) => ({
+    cardId: node.id,
+    posX: Math.round(node.x - minX + START_X),
+    posY: Math.round(node.y - minY + BASELINE_Y),
+  }));
 }

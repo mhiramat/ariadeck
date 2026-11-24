@@ -6,21 +6,62 @@ import {
   type Edge,
   type EdgeProps,
 } from '@xyflow/react';
-import { Check, X } from 'lucide-react';
-import type { RelationType } from '@ariadeck/core';
+import { Check, RotateCcw, X } from 'lucide-react';
+import type {
+  BoardType,
+  EdgeDirection,
+  EdgeStyleVariant,
+  RelationType,
+} from '@ariadeck/core';
 
 export interface DependencyEdgeData extends Record<string, unknown> {
+  boardType?: BoardType;
   relationType: RelationType;
+  direction?: EdgeDirection;
+  styleVariant?: EdgeStyleVariant;
+  color?: string | null;
   label?: string;
   isConflicted?: boolean;
   onUpdate?: (
     edgeId: string,
-    patch: { relationType: RelationType; label: string | null }
+    patch: {
+      relationType: RelationType;
+      direction?: EdgeDirection;
+      styleVariant?: EdgeStyleVariant;
+      label: string | null;
+    }
   ) => void;
   onDelete: (edgeId: string) => void;
 }
 
 export type DependencyFlowEdge = Edge<DependencyEdgeData, 'dependency'>;
+
+function buildJumpBackArcPath(
+  sourceX: number,
+  sourceY: number,
+  targetX: number,
+  targetY: number
+): [string, number, number] {
+  const dx = Math.abs(targetX - sourceX);
+  const archDepth = Math.max(84, Math.min(200, dx * 0.28 + 64));
+  const controlY = Math.max(sourceY, targetY) + archDepth;
+  const path = `M ${sourceX} ${sourceY} C ${sourceX} ${controlY}, ${targetX} ${controlY}, ${targetX} ${targetY}`;
+  // Cubic Bezier midpoint at t = 0.5
+  const labelX = (sourceX + targetX) / 2;
+  const labelY = 0.125 * sourceY + 0.75 * controlY + 0.125 * targetY;
+  return [path, labelX, labelY];
+}
+
+function getStrokeDasharray(
+  styleVariant: EdgeStyleVariant,
+  relationType: RelationType
+): string | undefined {
+  if (styleVariant === 'dotted') return '2 4';
+  if (styleVariant === 'dashed' || relationType === 'jump_back' || relationType === 'relates_to') {
+    return '6 4';
+  }
+  return undefined;
+}
 
 export function DependencyEdge({
   id,
@@ -30,38 +71,74 @@ export function DependencyEdge({
   targetY,
   sourcePosition,
   targetPosition,
+  markerStart,
   markerEnd,
   data,
 }: EdgeProps<DependencyFlowEdge>) {
-  const [edgePath, labelX, labelY] = getBezierPath({
-    sourceX,
-    sourceY,
-    sourcePosition,
-    targetX,
-    targetY,
-    targetPosition,
-  });
-
+  const boardType: BoardType = data?.boardType ?? 'flow';
   const currentRelation: RelationType = data?.relationType ?? 'blocks';
+  const currentDirection: EdgeDirection = data?.direction ?? 'directed';
+  const currentStyle: EdgeStyleVariant =
+    data?.styleVariant ?? (currentRelation === 'jump_back' ? 'dashed' : 'solid');
   const currentLabel = data?.label ?? '';
+
+  const [edgePath, labelX, labelY] =
+    currentRelation === 'jump_back'
+      ? buildJumpBackArcPath(sourceX, sourceY, targetX, targetY)
+      : getBezierPath({
+          sourceX,
+          sourceY,
+          sourcePosition,
+          targetX,
+          targetY,
+          targetPosition,
+        });
 
   const [editing, setEditing] = useState(false);
   const [draftRelation, setDraftRelation] = useState<RelationType>(currentRelation);
+  const [draftDirection, setDraftDirection] = useState<EdgeDirection>(currentDirection);
+  const [draftStyle, setDraftStyle] = useState<EdgeStyleVariant>(currentStyle);
   const [draftLabel, setDraftLabel] = useState(currentLabel);
 
   useEffect(() => {
     setDraftRelation(currentRelation);
+    setDraftDirection(currentDirection);
+    setDraftStyle(currentStyle);
     setDraftLabel(currentLabel);
-  }, [currentRelation, currentLabel]);
+  }, [currentRelation, currentDirection, currentStyle, currentLabel]);
 
   const isConflicted = Boolean(data?.isConflicted);
-  const displayLabel = currentLabel ? `${currentLabel} (${currentRelation})` : currentRelation;
+  const directionGlyph =
+    currentDirection === 'bidirectional'
+      ? '↔ '
+      : currentDirection === 'undirected'
+        ? '— '
+        : '';
+  const displayLabel = currentLabel
+    ? `${directionGlyph}${currentLabel} (${currentRelation})`
+    : `${directionGlyph}${currentRelation}`;
+
+  const strokeColor = isConflicted
+    ? '#f43f5e'
+    : data?.color
+      ? data.color
+      : currentRelation === 'jump_back'
+        ? '#f59e0b'
+        : currentRelation === 'relates_to'
+          ? '#2dd4bf'
+          : currentDirection === 'bidirectional'
+            ? '#f43f5e'
+            : currentDirection === 'undirected'
+              ? '#94a3b8'
+              : '#818cf8';
 
   const commitEdit = () => {
     setEditing(false);
     const trimmed = draftLabel.trim();
     data?.onUpdate?.(id, {
       relationType: draftRelation,
+      ...(boardType === 'flat' ? { direction: draftDirection } : {}),
+      styleVariant: draftStyle,
       label: trimmed ? trimmed : null,
     });
   };
@@ -77,6 +154,8 @@ export function DependencyEdge({
       e.preventDefault();
       e.stopPropagation();
       setDraftRelation(currentRelation);
+      setDraftDirection(currentDirection);
+      setDraftStyle(currentStyle);
       setDraftLabel(currentLabel);
       setEditing(false);
     }
@@ -87,15 +166,12 @@ export function DependencyEdge({
       <BaseEdge
         id={id}
         path={edgePath}
+        markerStart={markerStart}
         markerEnd={markerEnd}
         style={{
-          stroke: isConflicted
-            ? '#f43f5e'
-            : currentRelation === 'relates_to'
-              ? '#2dd4bf'
-              : '#818cf8',
+          stroke: strokeColor,
           strokeWidth: isConflicted ? 2.5 : 2,
-          strokeDasharray: currentRelation === 'relates_to' ? '6 4' : undefined,
+          strokeDasharray: getStrokeDasharray(currentStyle, currentRelation),
         }}
       />
       <EdgeLabelRenderer>
@@ -113,7 +189,7 @@ export function DependencyEdge({
             <form
               onSubmit={handleSubmit}
               onKeyDown={handleKeyDown}
-              className="flex items-center gap-1.5 rounded-lg border border-indigo-500 bg-slate-900 p-1.5 shadow-xl"
+              className="flex flex-wrap items-center gap-1.5 rounded-lg border border-indigo-500 bg-slate-900 p-1.5 shadow-xl"
             >
               <select
                 aria-label="Edge relation type"
@@ -124,7 +200,37 @@ export function DependencyEdge({
                 <option value="blocks">blocks</option>
                 <option value="causes">causes</option>
                 <option value="relates_to">relates_to</option>
+                {boardType === 'flow' ? (
+                  <option value="jump_back">jump_back</option>
+                ) : (
+                  <option value="custom">custom</option>
+                )}
               </select>
+
+              {boardType === 'flat' && (
+                <select
+                  aria-label="Edge direction"
+                  value={draftDirection}
+                  onChange={(e) => setDraftDirection(e.target.value as EdgeDirection)}
+                  className="rounded border border-slate-700 bg-slate-800 px-1.5 py-0.5 text-[11px] font-medium text-white outline-none focus:border-indigo-400"
+                >
+                  <option value="directed">→</option>
+                  <option value="bidirectional">↔</option>
+                  <option value="undirected">—</option>
+                </select>
+              )}
+
+              <select
+                aria-label="Edge style"
+                value={draftStyle}
+                onChange={(e) => setDraftStyle(e.target.value as EdgeStyleVariant)}
+                className="rounded border border-slate-700 bg-slate-800 px-1.5 py-0.5 text-[11px] font-medium text-white outline-none focus:border-indigo-400"
+              >
+                <option value="solid">solid</option>
+                <option value="dashed">dashed</option>
+                <option value="dotted">dotted</option>
+              </select>
+
               <input
                 type="text"
                 aria-label="Edge label"
@@ -148,6 +254,8 @@ export function DependencyEdge({
                 title="Cancel"
                 onClick={() => {
                   setDraftRelation(currentRelation);
+                  setDraftDirection(currentDirection);
+                  setDraftStyle(currentStyle);
                   setDraftLabel(currentLabel);
                   setEditing(false);
                 }}
@@ -157,14 +265,27 @@ export function DependencyEdge({
               </button>
             </form>
           ) : (
-            <div className="group flex items-center gap-1 rounded-full border border-slate-700 bg-slate-900/95 px-2 py-0.5 text-[10px] font-medium text-slate-300 shadow hover:border-indigo-400">
+            <div
+              className={`group flex items-center gap-1 rounded-full border bg-slate-900/95 px-2 py-0.5 text-[10px] font-medium shadow hover:border-indigo-400 ${
+                currentRelation === 'jump_back'
+                  ? 'border-amber-500/50 text-amber-200'
+                  : 'border-slate-700 text-slate-300'
+              }`}
+            >
+              {currentRelation === 'jump_back' && (
+                <RotateCcw className="h-2.5 w-2.5 text-amber-400" />
+              )}
               <button
                 type="button"
                 onClick={() => setEditing(true)}
                 aria-label={`Edit edge ${displayLabel}`}
                 title="Click to edit relation type or label"
                 className={`cursor-pointer ${
-                  isConflicted ? 'text-rose-400' : 'text-slate-300 hover:text-white'
+                  isConflicted
+                    ? 'text-rose-400'
+                    : currentRelation === 'jump_back'
+                      ? 'text-amber-200 hover:text-white'
+                      : 'text-slate-300 hover:text-white'
                 }`}
               >
                 {displayLabel}

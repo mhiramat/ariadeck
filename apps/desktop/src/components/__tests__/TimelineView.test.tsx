@@ -121,4 +121,41 @@ describe('TimelineView', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Move Design to later step' }));
     expect(moveSpy).toHaveBeenCalledWith('c1', 1);
   });
+
+  it('renders jump_back SVG return arcs with Show Loops toggle', () => {
+    const currentGraph = useBoardStore.getState().graph!;
+    useBoardStore.setState({
+      graph: {
+        ...currentGraph,
+        edges: [
+          ...currentGraph.edges,
+          {
+            id: 'e-loop',
+            boardId: 'board-1',
+            sourceCardId: 'c2',
+            targetCardId: 'c1',
+            relationType: 'jump_back',
+            direction: 'directed',
+            label: 'Retry flow',
+            styleVariant: 'dashed',
+            color: null,
+            isConflicted: false,
+            conflictReason: null,
+            createdAt: '2026-01-01T00:00:00.000Z',
+            updatedAt: '2026-01-01T00:00:00.000Z',
+            updatedByDeviceId: 'ariadeck-test',
+            version: 1,
+            deletedAt: null,
+          },
+        ],
+      },
+    });
+
+    render(<TimelineView />);
+    expect(screen.getByLabelText('Jump-back return arcs')).toBeInTheDocument();
+    expect(screen.getByText(/Retry flow/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Show Loops/i }));
+    expect(screen.queryByLabelText('Jump-back return arcs')).not.toBeInTheDocument();
+  });
 });

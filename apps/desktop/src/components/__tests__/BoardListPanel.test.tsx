@@ -94,7 +94,7 @@ describe('BoardListPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: /Add Board/i }));
 
     await waitFor(() => {
-      expect(createBoardSpy).toHaveBeenCalledWith('Research Notes', 'Literature links');
+      expect(createBoardSpy).toHaveBeenCalledWith('Research Notes', 'Literature links', 'flow');
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Delete Story Plot' }));

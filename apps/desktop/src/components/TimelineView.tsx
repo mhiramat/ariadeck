@@ -5,9 +5,11 @@ import {
   ArrowRight,
   Calendar,
   Plus,
+  RotateCcw,
   Sparkles,
 } from 'lucide-react';
 import {
+  detectJumpBackWarnings,
   detectTimelineViolations,
   type Card,
   type CardType,
@@ -22,6 +24,9 @@ const TYPE_BADGE: Record<CardType, { label: string; cls: string }> = {
   note: { label: 'Note', cls: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' },
 };
 
+const COLUMN_WIDTH = 288; // w-72
+const COLUMN_GAP = 16; // gap-4
+
 export function TimelineView() {
   const graph = useBoardStore((s) => s.graph);
   const selectedCardId = useBoardStore((s) => s.selectedCardId);
@@ -32,6 +37,8 @@ export function TimelineView() {
 
   const [draggedCardId, setDraggedCardId] = useState<string | null>(null);
   const [dragOverStep, setDragOverStep] = useState<number | null>(null);
+  const [showLoops, setShowLoops] = useState(true);
+  const [hoveredCardId, setHoveredCardId] = useState<string | null>(null);
 
   const cards = graph?.cards ?? [];
   const edges = graph?.edges ?? [];
@@ -39,6 +46,26 @@ export function TimelineView() {
   const violations = useMemo(
     () => detectTimelineViolations(cards, edges),
     [cards, edges]
+  );
+
+  const jumpBackEdges = useMemo(
+    () => edges.filter((e) => e.deletedAt === null && e.relationType === 'jump_back'),
+    [edges]
+  );
+
+  const jumpBackWarnings = useMemo(
+    () => detectJumpBackWarnings(cards, edges),
+    [cards, edges]
+  );
+
+  const warningByEdgeId = useMemo(
+    () => new Map(jumpBackWarnings.map((w) => [w.edgeId, w])),
+    [jumpBackWarnings]
+  );
+
+  const cardById = useMemo(
+    () => new Map(cards.map((c) => [c.id, c])),
+    [cards]
   );
 
   const violatedCardIds = useMemo(() => {
@@ -69,7 +96,6 @@ export function TimelineView() {
       }
     }
 
-    // Ensure contiguous columns from 0..maxStep (or at least Step 0 if empty)
     const count = Math.max(0, maxStep);
     const steps: number[] = [];
     for (let s = 0; s <= count; s++) {
@@ -116,6 +142,12 @@ export function TimelineView() {
   };
 
   const nextNewStep = stepNumbers.length;
+  const stepColumnOffset = unassignedCards.length > 0 ? 1 : 0;
+  const totalLaneWidth =
+    (stepNumbers.length + stepColumnOffset) * (COLUMN_WIDTH + COLUMN_GAP) + 32;
+
+  const getStepCenterX = (step: number): number =>
+    16 + (step + stepColumnOffset) * (COLUMN_WIDTH + COLUMN_GAP) + COLUMN_WIDTH / 2;
 
   const renderCard = (card: Card) => {
     const isSelected = card.id === selectedCardId;
@@ -134,6 +166,8 @@ export function TimelineView() {
           setDraggedCardId(null);
           setDragOverStep(null);
         }}
+        onMouseEnter={() => setHoveredCardId(card.id)}
+        onMouseLeave={() => setHoveredCardId((prev) => (prev === card.id ? null : prev))}
         onClick={() => selectCard(card.id)}
         className={`cursor-pointer rounded-xl border bg-slate-900 p-3 shadow transition-all ${
           hasViolation
@@ -226,6 +260,21 @@ export function TimelineView() {
           <span className="rounded-full bg-slate-800 px-2.5 py-0.5 text-[11px] text-slate-300">
             {cards.length} card(s)
           </span>
+          {jumpBackEdges.length > 0 && (
+            <button
+              type="button"
+              aria-pressed={showLoops}
+              onClick={() => setShowLoops((prev) => !prev)}
+              className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-medium transition ${
+                showLoops
+                  ? 'border-amber-500/50 bg-amber-500/15 text-amber-200'
+                  : 'border-slate-700 bg-slate-800 text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <RotateCcw className="h-3 w-3" />
+              Show Loops ({jumpBackEdges.length})
+            </button>
+          )}
           {violations.length > 0 && (
             <span className="inline-flex items-center gap-1 rounded-full border border-rose-500/40 bg-rose-500/15 px-2.5 py-0.5 text-[11px] font-medium text-rose-300">
               <AlertTriangle className="h-3 w-3" />
@@ -272,79 +321,164 @@ export function TimelineView() {
         </div>
       )}
 
-      {/* Horizontal Step Columns */}
-      <div className="flex flex-1 gap-4 overflow-x-auto p-4">
-        {unassignedCards.length > 0 && (
-          <section
-            aria-label="Unscheduled cards"
-            className="flex w-72 shrink-0 flex-col rounded-xl border border-dashed border-slate-700 bg-slate-900/40"
+      {/* Scrollable Timeline Canvas (Overhead Return Arcs + Step Columns) */}
+      <div className="flex flex-1 flex-col overflow-x-auto">
+        {showLoops && jumpBackEdges.length > 0 && (
+          <div
+            aria-label="Jump-back return arcs"
+            className="shrink-0 border-b border-slate-800/80 bg-slate-900/30 px-0 pt-2"
+            style={{ minWidth: `${totalLaneWidth}px` }}
           >
-            <div className="flex items-center justify-between border-b border-slate-800 px-3.5 py-2.5">
-              <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                Unscheduled
-              </h2>
-              <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-400">
-                {unassignedCards.length}
-              </span>
-            </div>
-            <div className="flex-1 space-y-2.5 overflow-y-auto p-3">
-              {unassignedCards.map(renderCard)}
-            </div>
-          </section>
+            <svg
+              width={totalLaneWidth}
+              height={Math.min(130, 56 + jumpBackEdges.length * 22)}
+              className="block overflow-visible"
+            >
+              <defs>
+                <marker
+                  id="jump-back-arrow"
+                  viewBox="0 0 10 10"
+                  refX="8"
+                  refY="5"
+                  markerWidth="6"
+                  markerHeight="6"
+                  orient="auto-start-reverse"
+                >
+                  <path d="M 0 1 L 10 5 L 0 9 z" fill="#f59e0b" />
+                </marker>
+              </defs>
+              {jumpBackEdges.map((edge, idx) => {
+                const src = cardById.get(edge.sourceCardId);
+                const tgt = cardById.get(edge.targetCardId);
+                if (!src || !tgt) return null;
+                const srcStep = src.timelineOrder ?? 0;
+                const tgtStep = tgt.timelineOrder ?? 0;
+                const x1 = getStepCenterX(srcStep);
+                const x2 = getStepCenterX(tgtStep);
+                const svgHeight = Math.min(130, 56 + jumpBackEdges.length * 22);
+                const baseY = svgHeight - 8;
+                const arcHeight = Math.min(baseY - 18, 32 + idx * 18);
+                const midX = x1 === x2 ? x1 + 40 : (x1 + x2) / 2;
+                const controlY = baseY - arcHeight;
+                const d =
+                  x1 === x2
+                    ? `M ${x1 + 14} ${baseY} C ${x1 + 52} ${controlY}, ${x1 - 52} ${controlY}, ${x1 - 14} ${baseY}`
+                    : `M ${x1} ${baseY} Q ${midX} ${controlY} ${x2} ${baseY}`;
+
+                const warning = warningByEdgeId.get(edge.id);
+                const isFocused =
+                  hoveredCardId === null ||
+                  hoveredCardId === edge.sourceCardId ||
+                  hoveredCardId === edge.targetCardId;
+                const apexLabel = edge.label
+                  ? `↩ ${edge.label}`
+                  : `↩ ${src.title} → ${tgt.title}`;
+
+                return (
+                  <g
+                    key={edge.id}
+                    opacity={isFocused ? 1 : 0.22}
+                    className="transition-opacity duration-200"
+                  >
+                    <path
+                      d={d}
+                      fill="none"
+                      stroke={warning ? '#fbbf24' : '#f59e0b'}
+                      strokeWidth={isFocused ? 2 : 1.5}
+                      strokeDasharray="6 4"
+                      markerEnd="url(#jump-back-arrow)"
+                    />
+                    <text
+                      x={midX}
+                      y={Math.max(14, controlY + 12)}
+                      textAnchor="middle"
+                      fill={warning ? '#fde68a' : '#fcd34d'}
+                      fontSize="11"
+                      fontWeight="600"
+                    >
+                      {warning ? `⚠ ${apexLabel}` : apexLabel}
+                    </text>
+                  </g>
+                );
+              })}
+            </svg>
+          </div>
         )}
 
-        {stepNumbers.map((step) => {
-          const stepCards = cardsByStep.get(step) ?? [];
-          const isDropTarget = dragOverStep === step;
-          return (
+        {/* Horizontal Step Columns */}
+        <div className="flex flex-1 gap-4 p-4">
+          {unassignedCards.length > 0 && (
             <section
-              key={step}
-              aria-label={`Step ${step}`}
-              onDragOver={(e) => handleDragOver(e, step)}
-              onDragLeave={() => setDragOverStep(null)}
-              onDrop={(e) => handleDrop(e, step)}
-              className={`flex w-72 shrink-0 flex-col rounded-xl border transition-colors ${
-                isDropTarget
-                  ? 'border-indigo-400 bg-indigo-950/30'
-                  : 'border-slate-800 bg-slate-900/60'
-              }`}
+              aria-label="Unscheduled cards"
+              className="flex w-72 shrink-0 flex-col rounded-xl border border-dashed border-slate-700 bg-slate-900/40"
             >
               <div className="flex items-center justify-between border-b border-slate-800 px-3.5 py-2.5">
-                <h2 className="text-xs font-semibold uppercase tracking-wide text-indigo-300">
-                  Step {step}
+                <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                  Unscheduled
                 </h2>
                 <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-400">
-                  {stepCards.length}
+                  {unassignedCards.length}
                 </span>
               </div>
               <div className="flex-1 space-y-2.5 overflow-y-auto p-3">
-                {stepCards.length === 0 ? (
-                  <p className="py-6 text-center text-xs italic text-slate-600">
-                    Drop a card here
-                  </p>
-                ) : (
-                  stepCards.map(renderCard)
-                )}
+                {unassignedCards.map(renderCard)}
               </div>
             </section>
-          );
-        })}
+          )}
 
-        {/* Drop target for creating a new step column at the end */}
-        <section
-          aria-label={`Step ${nextNewStep} drop zone`}
-          onDragOver={(e) => handleDragOver(e, nextNewStep)}
-          onDragLeave={() => setDragOverStep(null)}
-          onDrop={(e) => handleDrop(e, nextNewStep)}
-          className={`flex w-56 shrink-0 flex-col items-center justify-center rounded-xl border border-dashed p-4 text-center transition-colors ${
-            dragOverStep === nextNewStep
-              ? 'border-indigo-400 bg-indigo-950/30 text-indigo-300'
-              : 'border-slate-800 bg-slate-900/20 text-slate-500'
-          }`}
-        >
-          <Plus className="mb-1 h-5 w-5" />
-          <span className="text-xs font-medium">Drop to create Step {nextNewStep}</span>
-        </section>
+          {stepNumbers.map((step) => {
+            const stepCards = cardsByStep.get(step) ?? [];
+            const isDropTarget = dragOverStep === step;
+            return (
+              <section
+                key={step}
+                aria-label={`Step ${step}`}
+                onDragOver={(e) => handleDragOver(e, step)}
+                onDragLeave={() => setDragOverStep(null)}
+                onDrop={(e) => handleDrop(e, step)}
+                className={`flex w-72 shrink-0 flex-col rounded-xl border transition-colors ${
+                  isDropTarget
+                    ? 'border-indigo-400 bg-indigo-950/30'
+                    : 'border-slate-800 bg-slate-900/60'
+                }`}
+              >
+                <div className="flex items-center justify-between border-b border-slate-800 px-3.5 py-2.5">
+                  <h2 className="text-xs font-semibold uppercase tracking-wide text-indigo-300">
+                    Step {step}
+                  </h2>
+                  <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-400">
+                    {stepCards.length}
+                  </span>
+                </div>
+                <div className="flex-1 space-y-2.5 overflow-y-auto p-3">
+                  {stepCards.length === 0 ? (
+                    <p className="py-6 text-center text-xs italic text-slate-600">
+                      Drop a card here
+                    </p>
+                  ) : (
+                    stepCards.map(renderCard)
+                  )}
+                </div>
+              </section>
+            );
+          })}
+
+          {/* Drop target for creating a new step column at the end */}
+          <section
+            aria-label={`Step ${nextNewStep} drop zone`}
+            onDragOver={(e) => handleDragOver(e, nextNewStep)}
+            onDragLeave={() => setDragOverStep(null)}
+            onDrop={(e) => handleDrop(e, nextNewStep)}
+            className={`flex w-56 shrink-0 flex-col items-center justify-center rounded-xl border border-dashed p-4 text-center transition-colors ${
+              dragOverStep === nextNewStep
+                ? 'border-indigo-400 bg-indigo-950/30 text-indigo-300'
+                : 'border-slate-800 bg-slate-900/20 text-slate-500'
+            }`}
+          >
+            <Plus className="mb-1 h-5 w-5" />
+            <span className="text-xs font-medium">Drop to create Step {nextNewStep}</span>
+          </section>
+        </div>
       </div>
     </div>
   );

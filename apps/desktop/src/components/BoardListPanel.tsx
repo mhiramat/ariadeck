@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { X, Plus, Pencil, Trash2, Check, FolderKanban } from 'lucide-react';
-import type { Board } from '@ariadeck/core';
+import type { Board, BoardType } from '@ariadeck/core';
 import { useBoardStore } from '../store/useBoardStore.ts';
 
 export function BoardListPanel() {
@@ -19,6 +19,7 @@ export function BoardListPanel() {
 
   const [newTitle, setNewTitle] = useState('');
   const [newDescription, setNewDescription] = useState('');
+  const [newBoardType, setNewBoardType] = useState<BoardType>('flow');
 
   if (!boardListOpen) {
     return null;
@@ -51,9 +52,10 @@ export function BoardListPanel() {
     e.preventDefault();
     const trimmed = newTitle.trim();
     if (!trimmed) return;
-    await createBoard(trimmed, newDescription.trim());
+    await createBoard(trimmed, newDescription.trim(), newBoardType);
     setNewTitle('');
     setNewDescription('');
+    setNewBoardType('flow');
   };
 
   return (
@@ -138,7 +140,18 @@ export function BoardListPanel() {
             >
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-xs font-semibold text-slate-100">{board.title}</p>
+                  <div className="flex items-center gap-1.5">
+                    <p className="truncate text-xs font-semibold text-slate-100">{board.title}</p>
+                    <span
+                      className={`shrink-0 rounded px-1 py-0.5 text-[9px] font-semibold uppercase ${
+                        (board.boardType ?? 'flow') === 'flat'
+                          ? 'bg-emerald-500/20 text-emerald-300'
+                          : 'bg-indigo-500/20 text-indigo-300'
+                      }`}
+                    >
+                      {board.boardType ?? 'flow'}
+                    </span>
+                  </div>
                   {board.description && (
                     <p className="mt-0.5 line-clamp-2 text-[11px] text-slate-400">
                       {board.description}
@@ -204,6 +217,30 @@ export function BoardListPanel() {
           onChange={(e) => setNewDescription(e.target.value)}
           className="w-full rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:border-indigo-500"
         />
+        <div className="grid grid-cols-2 gap-1.5">
+          <button
+            type="button"
+            onClick={() => setNewBoardType('flow')}
+            className={`rounded-lg border px-2 py-1 text-[11px] font-medium transition ${
+              newBoardType === 'flow'
+                ? 'border-indigo-500 bg-indigo-600/20 text-indigo-200'
+                : 'border-slate-700 bg-slate-800 text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            Flow (Timeline)
+          </button>
+          <button
+            type="button"
+            onClick={() => setNewBoardType('flat')}
+            className={`rounded-lg border px-2 py-1 text-[11px] font-medium transition ${
+              newBoardType === 'flat'
+                ? 'border-emerald-500 bg-emerald-600/20 text-emerald-200'
+                : 'border-slate-700 bg-slate-800 text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            Flat (Network)
+          </button>
+        </div>
         <button
           type="submit"
           className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-indigo-500"
