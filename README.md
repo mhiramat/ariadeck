@@ -18,6 +18,12 @@ Horizontal topological sequence automatically grouped by dependency depth (`Step
 
 ![Ariadeck Timeline View Sample](docs/images/sample-timeline.png)
 
+### Flat Board View (Relationship Map)
+
+Non-temporal relationship canvas (`boardType: "flat"`) supporting cycles, directed (`→`), bidirectional (`↔`), and undirected (`—`) edges, custom line styles and colors, and force-directed **Auto-Arrange** — rendered from [`docs/samples/ariadeck-architecture-flat.json`](docs/samples/ariadeck-architecture-flat.json).
+
+![Ariadeck Flat Board Sample](docs/images/sample-flat-board.png)
+
 ## Architecture
 
 Ariadeck is organized as a TypeScript `pnpm` monorepo:
