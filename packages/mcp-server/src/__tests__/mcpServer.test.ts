@@ -120,7 +120,9 @@ describe('Ariadeck MCP Server (Resources, Tools, Prompts)', () => {
       },
     });
     expect(cycleRes.isError).toBe(true);
-    expect((cycleRes.content as Array<{ text: string }>)[0]?.text).toContain('CYCLIC_DEPENDENCY');
+    expect((cycleRes.content as Array<{ text: string }>)[0]?.text).toContain(
+      'ERR_TEMPORAL_CYCLE_DETECTED'
+    );
 
     // Split c1 into two cards sequentially
     const splitRes = await client.callTool({
@@ -220,5 +222,110 @@ describe('Ariadeck MCP Server (Resources, Tools, Prompts)', () => {
     expect(prompt.messages[0]?.content).toMatchObject({
       type: 'text',
     });
+  });
+
+  it('supports Phase 2 flat boards, jump_back edges, update_edge, compute_timeline, and convert_board_type', async () => {
+    // 1. Create a flat board with bidirectional/undirected edges and cycle
+    const flatBoardRes = await client.callTool({
+      name: 'create_board',
+      arguments: { title: 'Character Map', boardType: 'flat' },
+    });
+    const flatBoard = parseToolText(flatBoardRes) as { id: string; boardType: string };
+    expect(flatBoard.boardType).toBe('flat');
+
+    const c1 = parseToolText(
+      await client.callTool({
+        name: 'create_card',
+        arguments: { boardId: flatBoard.id, title: 'Alice' },
+      })
+    ) as Card;
+    const c2 = parseToolText(
+      await client.callTool({
+        name: 'create_card',
+        arguments: { boardId: flatBoard.id, title: 'Bob' },
+      })
+    ) as Card;
+
+    const rivalEdge = parseToolText(
+      await client.callTool({
+        name: 'connect_cards',
+        arguments: {
+          boardId: flatBoard.id,
+          sourceCardId: c1.id,
+          targetCardId: c2.id,
+          relationType: 'custom',
+          direction: 'bidirectional',
+          label: 'Rivals',
+          styleVariant: 'dashed',
+          color: '#f43f5e',
+        },
+      })
+    ) as { id: string; direction: string; label?: string };
+    expect(rivalEdge.direction).toBe('bidirectional');
+    expect(rivalEdge.label).toBe('Rivals');
+
+    // Update edge label and style via update_edge
+    const updatedEdge = parseToolText(
+      await client.callTool({
+        name: 'update_edge',
+        arguments: { edgeId: rivalEdge.id, label: 'Fierce Rivals', styleVariant: 'dotted' },
+      })
+    ) as { label?: string; styleVariant?: string };
+    expect(updatedEdge.label).toBe('Fierce Rivals');
+    expect(updatedEdge.styleVariant).toBe('dotted');
+
+    // Dry-run convert_board_type flat -> flow reports incompatibility
+    const dryRun = parseToolText(
+      await client.callTool({
+        name: 'convert_board_type',
+        arguments: { boardId: flatBoard.id, targetType: 'flow', dryRun: true },
+      })
+    ) as { analysis: { canConvertCleanly: boolean; symmetricEdgeIds: string[] } };
+    expect(dryRun.analysis.canConvertCleanly).toBe(false);
+    expect(dryRun.analysis.symmetricEdgeIds).toHaveLength(1);
+
+    // Convert with strategy='demote_incompatible'
+    const converted = parseToolText(
+      await client.callTool({
+        name: 'convert_board_type',
+        arguments: {
+          boardId: flatBoard.id,
+          targetType: 'flow',
+          strategy: 'demote_incompatible',
+        },
+      })
+    ) as { board: { boardType: string } };
+    expect(converted.board.boardType).toBe('flow');
+
+    // Add causal edge + jump_back loop and run compute_timeline
+    await client.callTool({
+      name: 'connect_cards',
+      arguments: {
+        boardId: flatBoard.id,
+        sourceCardId: c1.id,
+        targetCardId: c2.id,
+        relationType: 'causes',
+      },
+    });
+    await client.callTool({
+      name: 'connect_cards',
+      arguments: {
+        boardId: flatBoard.id,
+        sourceCardId: c2.id,
+        targetCardId: c1.id,
+        relationType: 'jump_back',
+        label: 'Loop back',
+      },
+    });
+
+    const timeline = parseToolText(
+      await client.callTool({
+        name: 'compute_timeline',
+        arguments: { boardId: flatBoard.id },
+      })
+    ) as { jumpBackEdges: unknown[]; warnings: unknown[]; hasTemporalCycle: boolean };
+    expect(timeline.hasTemporalCycle).toBe(false);
+    expect(timeline.jumpBackEdges).toHaveLength(1);
+    expect(timeline.warnings).toHaveLength(0);
   });
 });

@@ -93,6 +93,27 @@ Strictly validate and import an `ariadeck-board` v1 JSON document as a new board
 - `json` (string, required)
 - `titleOverride` (string, optional)
 
+### `update_edge`
+Update `relationType`, `direction`, `label`, `styleVariant`, or `color` on an existing edge with full board-type and DAG validation.
+- `edgeId` (string, required)
+- `relationType` (`blocks` | `causes` | `relates_to` | `jump_back` | `custom`, optional)
+- `direction` (`directed` | `bidirectional` | `undirected`, optional)
+- `label` (string | null, optional)
+- `styleVariant` (`solid` | `dashed` | `dotted`, optional)
+- `color` (string | null, optional)
+
+### `compute_timeline`
+Compute topological timeline ranks, contradiction violations, `jump_back` return edges, and forward-pointing `jump_back` warnings for a `flow` board.
+- `boardId` (string, required)
+- `applyToCards` (boolean, optional, default `true`)
+
+### `convert_board_type`
+Analyze (`dryRun: true`) or convert a board between `flow` and `flat` modes (`strategy: "abort" | "demote_incompatible"`).
+- `boardId` (string, required)
+- `targetType` (`flow` | `flat`, required)
+- `dryRun` (boolean, optional)
+- `strategy` (`abort` | `demote_incompatible`, optional, default `abort`)
+
 ## Prompts
 
 - `analyze_and_split_complex_cards(board_id)`

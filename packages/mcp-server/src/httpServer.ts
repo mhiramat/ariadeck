@@ -2,11 +2,13 @@ import express, { type Express, type Request, type Response, type NextFunction }
 import cors from 'cors';
 import {
   AriadeckError,
+  BoardConversionError,
   BoardGraphService,
   BoardSyncEngine,
   CyclicDependencyError,
   NotFoundError,
   ValidationError,
+  type BoardType,
   type ConflictResolutionAction,
   type MutationContext,
 } from '@ariadeck/core';
@@ -39,6 +41,12 @@ function paramId(req: Request, key = 'id'): string {
 }
 
 function sendDomainError(res: Response, error: unknown): void {
+  if (error instanceof BoardConversionError) {
+    res.status(409).json({
+      error: { code: error.code, message: error.message, analysis: error.analysis },
+    });
+    return;
+  }
   if (error instanceof CyclicDependencyError) {
     res.status(409).json({ error: { code: error.code, message: error.message } });
     return;
@@ -186,12 +194,19 @@ export function createHttpApp(
   app.post(
     '/api/boards',
     asyncHandler(async (req, res) => {
-      const { title, description } = req.body ?? {};
+      const { title, description, boardType } = req.body ?? {};
       if (typeof title !== 'string') {
         throw new ValidationError('Field "title" is required and must be a string.');
       }
+      if (boardType !== undefined && boardType !== 'flow' && boardType !== 'flat') {
+        throw new ValidationError('Field "boardType" must be "flow" or "flat".');
+      }
       const board = await service.createBoard(
-        { title, description: typeof description === 'string' ? description : '' },
+        {
+          title,
+          description: typeof description === 'string' ? description : '',
+          ...(boardType !== undefined ? { boardType: boardType as BoardType } : {}),
+        },
         getMutationContext(req)
       );
       res.status(201).json({ board });
@@ -247,11 +262,43 @@ export function createHttpApp(
   );
 
   app.post(
+    '/api/boards/:id/convert-type',
+    asyncHandler(async (req, res) => {
+      const body = req.body ?? {};
+      if (body.targetType !== 'flow' && body.targetType !== 'flat') {
+        throw new ValidationError('Field "targetType" must be "flow" or "flat".');
+      }
+      if (body.dryRun === true) {
+        const analysis = await service.analyzeBoardTypeConversion(
+          paramId(req),
+          body.targetType
+        );
+        res.json({ analysis });
+        return;
+      }
+      const strategy =
+        body.strategy === 'demote_incompatible' ? 'demote_incompatible' : 'abort';
+      const result = await service.convertBoardType(
+        paramId(req),
+        body.targetType,
+        strategy,
+        getMutationContext(req)
+      );
+      res.json(result);
+    })
+  );
+
+  app.post(
     '/api/boards/:id/timeline/compute',
     asyncHandler(async (req, res) => {
+      const applyToCards =
+        req.body && typeof req.body.applyToCards === 'boolean'
+          ? req.body.applyToCards
+          : true;
       const result = await service.computeTimelineLayout(
         paramId(req),
-        getMutationContext(req)
+        getMutationContext(req),
+        { applyToCards }
       );
       res.json(result);
     })
@@ -448,12 +495,14 @@ export function createHttpApp(
       if (!Array.isArray(body.subCards)) {
         throw new ValidationError('Field "subCards" must be an array.');
       }
-      const linkMode = body.linkMode === 'parallel' ? 'parallel' : 'sequential';
       const result = await service.splitCard(
         {
           targetCardId: paramId(req),
           subCards: body.subCards,
-          linkMode,
+          ...(body.linkMode !== undefined ? { linkMode: body.linkMode } : {}),
+          ...(body.edgeInheritance !== undefined
+            ? { edgeInheritance: body.edgeInheritance }
+            : {}),
         },
         getMutationContext(req)
       );
@@ -480,7 +529,12 @@ export function createHttpApp(
         body.sourceCardId,
         body.targetCardId,
         body.relationType,
-        body.label,
+        {
+          ...(body.direction !== undefined ? { direction: body.direction } : {}),
+          ...(body.label !== undefined ? { label: body.label } : {}),
+          ...(body.styleVariant !== undefined ? { styleVariant: body.styleVariant } : {}),
+          ...(body.color !== undefined ? { color: body.color } : {}),
+        },
         getMutationContext(req)
       );
       res.status(201).json({ edge });
@@ -495,7 +549,10 @@ export function createHttpApp(
         paramId(req),
         {
           ...(body.relationType !== undefined ? { relationType: body.relationType } : {}),
+          ...(body.direction !== undefined ? { direction: body.direction } : {}),
           ...(body.label !== undefined ? { label: body.label } : {}),
+          ...(body.styleVariant !== undefined ? { styleVariant: body.styleVariant } : {}),
+          ...(body.color !== undefined ? { color: body.color } : {}),
         },
         getMutationContext(req)
       );

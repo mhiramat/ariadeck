@@ -3,6 +3,7 @@ import { z } from 'zod';
 import {
   AriadeckError,
   BoardGraphService,
+  computeTopologicalSteps,
   type BoardGraph,
   type MutationContext,
 } from '@ariadeck/core';
@@ -14,9 +15,13 @@ const MCP_MUTATION_CTX: MutationContext = {
   deviceId: MCP_DEVICE_ID,
 };
 
+const BoardTypeSchema = z.enum(['flow', 'flat']);
 const CardTypeSchema = z.enum(['task', 'idea', 'plot_event', 'note']);
 const CardStatusSchema = z.enum(['todo', 'in_progress', 'done', 'archived']);
-const RelationTypeSchema = z.enum(['blocks', 'causes', 'relates_to']);
+const RelationTypeSchema = z.enum(['blocks', 'causes', 'relates_to', 'jump_back', 'custom']);
+const EdgeDirectionSchema = z.enum(['directed', 'bidirectional', 'undirected']);
+const EdgeStyleVariantSchema = z.enum(['solid', 'dashed', 'dotted']);
+const SplitEdgeInheritanceSchema = z.enum(['sequential', 'broadcast', 'none']);
 
 function formatBoardSummaryMarkdown(graph: BoardGraph): string {
   const cardById = new Map(graph.cards.map((c) => [c.id, c]));
@@ -28,6 +33,7 @@ function formatBoardSummaryMarkdown(graph: BoardGraph): string {
     '',
     graph.board.description ? `${graph.board.description}\n` : '',
     `- **Board ID**: \`${graph.board.id}\``,
+    `- **Board Type**: \`${graph.board.boardType ?? 'flow'}\``,
     `- **Active Cards**: ${graph.cards.length}`,
     `- **Active Edges**: ${graph.edges.length}`,
     `- **Conflicted Edges**: ${conflictedEdges.length}`,
@@ -129,6 +135,7 @@ export function createAriadeckMcpServer(service: BoardGraphService): McpServer {
         id: b.id,
         title: b.title,
         description: b.description,
+        boardType: b.boardType ?? 'flow',
         updatedAt: b.updatedAt,
       }));
       return {
@@ -166,12 +173,23 @@ export function createAriadeckMcpServer(service: BoardGraphService): McpServer {
     async (uri, variables) => {
       const boardId = String(variables.board_id ?? '');
       const graph = await service.getBoardGraph(boardId);
+      const boardType = graph.board.boardType ?? 'flow';
+      const ranks =
+        boardType === 'flow' ? computeTopologicalSteps(graph.cards, graph.edges) : null;
+      const enriched = {
+        ...graph,
+        board: { ...graph.board, boardType },
+        cards: graph.cards.map((c) => ({
+          ...c,
+          ...(ranks ? { timelineRank: ranks.get(c.id) ?? 0 } : {}),
+        })),
+      };
       return {
         contents: [
           {
             uri: uri.href,
             mimeType: 'application/json',
-            text: JSON.stringify(graph, null, 2),
+            text: JSON.stringify(enriched, null, 2),
           },
         ],
       };
@@ -220,10 +238,14 @@ export function createAriadeckMcpServer(service: BoardGraphService): McpServer {
   server.registerTool(
     'create_board',
     {
-      description: 'Create a new Ariadeck board.',
+      description:
+        'Create a new Ariadeck board. Choose boardType "flow" (default) for task dependencies, workflows, and timelines, or "flat" for relationship diagrams, character maps, and component networks where cycles and bidirectional/undirected edges are allowed.',
       inputSchema: {
         title: z.string().describe('Title of the new Ariadeck board'),
         description: z.string().optional().describe('Optional board description'),
+        boardType: BoardTypeSchema.optional().describe(
+          'Board mode: "flow" (temporal DAG + timeline, default) or "flat" (non-temporal relationship network)'
+        ),
       },
     },
     async (args) => {
@@ -232,6 +254,7 @@ export function createAriadeckMcpServer(service: BoardGraphService): McpServer {
           {
             title: args.title,
             description: args.description,
+            boardType: args.boardType,
           },
           MCP_MUTATION_CTX
         );
@@ -359,14 +382,22 @@ export function createAriadeckMcpServer(service: BoardGraphService): McpServer {
     'connect_cards',
     {
       description:
-        'Create a directed dependency edge (sourceCardId -> targetCardId) between two cards on an Ariadeck board. Rejects cyclic dependencies.',
+        'Create an edge between two cards on an Ariadeck board. On flow boards, blocks/causes enforce DAG acyclicity while jump_back expresses backward loops/retries. On flat boards, cycles as well as bidirectional and undirected edges are allowed.',
       inputSchema: {
         boardId: z.string().describe('ID of the Ariadeck board'),
-        sourceCardId: z.string().describe('Prerequisite or cause card ID'),
-        targetCardId: z.string().describe('Dependent or effect card ID'),
+        sourceCardId: z.string().describe('Source (prerequisite/cause) card ID'),
+        targetCardId: z.string().describe('Target (dependent/effect) card ID'),
         relationType: RelationTypeSchema.optional().describe(
-          'Relation type: blocks, causes, or relates_to (default: blocks)'
+          'Relation type: blocks, causes, relates_to, jump_back (flow only), or custom (flat only)'
         ),
+        direction: EdgeDirectionSchema.optional().describe(
+          'Edge direction: directed (default), bidirectional (flat only), or undirected (flat only)'
+        ),
+        label: z.string().optional().describe('Optional edge annotation label'),
+        styleVariant: EdgeStyleVariantSchema.optional().describe(
+          'Line style: solid, dashed, or dotted'
+        ),
+        color: z.string().optional().describe('Optional hex/CSS color for edge rendering'),
       },
     },
     async (args) => {
@@ -376,7 +407,58 @@ export function createAriadeckMcpServer(service: BoardGraphService): McpServer {
           args.sourceCardId,
           args.targetCardId,
           args.relationType ?? 'blocks',
-          undefined,
+          {
+            direction: args.direction,
+            label: args.label,
+            styleVariant: args.styleVariant,
+            color: args.color,
+          },
+          MCP_MUTATION_CTX
+        );
+        return toolSuccess(edge);
+      } catch (error) {
+        return toolError(error);
+      }
+    }
+  );
+
+  server.registerTool(
+    'update_edge',
+    {
+      description:
+        'Update relationType, direction, label, styleVariant, or color on an existing edge with full board-type and DAG validation.',
+      inputSchema: {
+        edgeId: z.string().describe('ID of the edge to update'),
+        relationType: RelationTypeSchema.optional().describe('Updated relation type'),
+        direction: EdgeDirectionSchema.optional().describe(
+          'Updated direction: directed, bidirectional, or undirected'
+        ),
+        label: z
+          .string()
+          .nullable()
+          .optional()
+          .describe('Updated edge label (pass null or empty string to clear)'),
+        styleVariant: EdgeStyleVariantSchema.optional().describe(
+          'Updated line style: solid, dashed, or dotted'
+        ),
+        color: z
+          .string()
+          .nullable()
+          .optional()
+          .describe('Updated edge color (pass null to reset)'),
+      },
+    },
+    async (args) => {
+      try {
+        const edge = await service.updateEdge(
+          args.edgeId,
+          {
+            relationType: args.relationType,
+            direction: args.direction,
+            label: args.label,
+            styleVariant: args.styleVariant,
+            color: args.color,
+          },
           MCP_MUTATION_CTX
         );
         return toolSuccess(edge);
@@ -425,8 +507,11 @@ export function createAriadeckMcpServer(service: BoardGraphService): McpServer {
           .enum(['sequential', 'parallel'])
           .optional()
           .describe(
-            'Whether to chain child cards sequentially or keep them parallel (default: sequential)'
+            'Legacy alias for edgeInheritance (sequential or parallel)'
           ),
+        edgeInheritance: SplitEdgeInheritanceSchema.optional().describe(
+          'How child cards inherit incident edges: sequential (default on flow), broadcast (default on flat), or none'
+        ),
       },
     },
     async (args) => {
@@ -435,7 +520,8 @@ export function createAriadeckMcpServer(service: BoardGraphService): McpServer {
           {
             targetCardId: args.targetCardId,
             subCards: args.subCards,
-            linkMode: args.linkMode ?? 'sequential',
+            linkMode: args.linkMode,
+            edgeInheritance: args.edgeInheritance,
           },
           MCP_MUTATION_CTX
         );
@@ -521,14 +607,91 @@ export function createAriadeckMcpServer(service: BoardGraphService): McpServer {
     'compute_timeline_layout',
     {
       description:
-        'Compute topological timeline step indices for all cards on an Ariadeck board using longest-path layering and persist each card timelineOrder.',
+        'Compute topological timeline step indices for all cards on a flow board using longest-path layering and persist each card timelineOrder.',
       inputSchema: {
-        boardId: z.string().describe('ID of the Ariadeck board to sort'),
+        boardId: z.string().describe('ID of the Ariadeck flow board to sort'),
+        applyToCards: z
+          .boolean()
+          .optional()
+          .describe('Whether to persist computed ranks to card timelineOrder (default: true)'),
       },
     },
     async (args) => {
       try {
-        const result = await service.computeTimelineLayout(args.boardId, MCP_MUTATION_CTX);
+        const result = await service.computeTimelineLayout(
+          args.boardId,
+          MCP_MUTATION_CTX,
+          { applyToCards: args.applyToCards }
+        );
+        return toolSuccess(result);
+      } catch (error) {
+        return toolError(error);
+      }
+    }
+  );
+
+  server.registerTool(
+    'compute_timeline',
+    {
+      description:
+        'Compute topological timeline ranks, contradiction violations, jump_back return edges, and forward-pointing jump_back warnings for a flow board.',
+      inputSchema: {
+        boardId: z.string().describe('ID of the Ariadeck flow board'),
+        applyToCards: z
+          .boolean()
+          .optional()
+          .describe('Whether to persist computed ranks to card timelineOrder (default: true)'),
+      },
+    },
+    async (args) => {
+      try {
+        const result = await service.computeTimelineLayout(
+          args.boardId,
+          MCP_MUTATION_CTX,
+          { applyToCards: args.applyToCards }
+        );
+        return toolSuccess(result);
+      } catch (error) {
+        return toolError(error);
+      }
+    }
+  );
+
+  server.registerTool(
+    'convert_board_type',
+    {
+      description:
+        'Analyze (dryRun: true) or execute conversion of an Ariadeck board between "flow" and "flat" modes.',
+      inputSchema: {
+        boardId: z.string().describe('ID of the Ariadeck board to convert'),
+        targetType: BoardTypeSchema.describe('Target board type: "flow" or "flat"'),
+        dryRun: z
+          .boolean()
+          .optional()
+          .describe('If true, return conversion analysis without modifying the board'),
+        strategy: z
+          .enum(['abort', 'demote_incompatible'])
+          .optional()
+          .describe(
+            'Strategy when converting flat -> flow with incompatible edges (default: abort)'
+          ),
+      },
+    },
+    async (args) => {
+      try {
+        if (args.dryRun) {
+          const analysis = await service.analyzeBoardTypeConversion(
+            args.boardId,
+            args.targetType
+          );
+          return toolSuccess({ analysis });
+        }
+        const result = await service.convertBoardType(
+          args.boardId,
+          args.targetType,
+          args.strategy ?? 'abort',
+          MCP_MUTATION_CTX
+        );
         return toolSuccess(result);
       } catch (error) {
         return toolError(error);
