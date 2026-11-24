@@ -1,0 +1,218 @@
+{
+  "format": "ariadeck-board",
+  "schemaVersion": 1,
+  "exportedAt": "2026-11-25T06:30:00.000Z",
+  "board": {
+    "title": "Ariadeck Component Architecture",
+    "description": "Flat-type relationship map illustrating how Ariadeck packages, storage, sync, and AI clients interact.",
+    "boardType": "flat"
+  },
+  "cards": [
+    {
+      "id": "desktop",
+      "title": "@ariadeck/desktop",
+      "content": "Modeless React Flow canvas (**Flow** & **Flat** boards), Timeline return arcs, and live SSE updates.",
+      "cardType": "task",
+      "status": "done",
+      "tags": ["desktop", "react", "xyflow"],
+      "posX": 80,
+      "posY": 40,
+      "timelineOrder": null,
+      "startAt": null,
+      "endAt": null
+    },
+    {
+      "id": "json-md",
+      "title": "JSON / Markdown Exchange",
+      "content": "Schema-validated `ariadeck-board` v1 JSON backups and timeline-ordered GFM Markdown export.",
+      "cardType": "note",
+      "status": "done",
+      "tags": ["export", "import", "schema"],
+      "posX": 460,
+      "posY": 40,
+      "timelineOrder": null,
+      "startAt": null,
+      "endAt": null
+    },
+    {
+      "id": "android",
+      "title": "@ariadeck/android",
+      "content": "Touch-optimized Capacitor app with offline storage, photo/voice capture, and mobile timeline.",
+      "cardType": "task",
+      "status": "in_progress",
+      "tags": ["android", "capacitor", "mobile"],
+      "posX": 840,
+      "posY": 40,
+      "timelineOrder": null,
+      "startAt": null,
+      "endAt": null
+    },
+    {
+      "id": "mcp-server",
+      "title": "@ariadeck/mcp-server",
+      "content": "Stdio & Streamable HTTP MCP server, REST API, `/api/events` SSE bridge, and `0600` auth-token guard.",
+      "cardType": "task",
+      "status": "done",
+      "tags": ["mcp", "http", "sse"],
+      "posX": 80,
+      "posY": 300,
+      "timelineOrder": null,
+      "startAt": null,
+      "endAt": null
+    },
+    {
+      "id": "core",
+      "title": "@ariadeck/core",
+      "content": "Platform-agnostic domain models, `BoardGraphService`, DAG/Flat validation, and topological timeline engine.",
+      "cardType": "idea",
+      "status": "done",
+      "tags": ["core", "engine", "dag"],
+      "posX": 460,
+      "posY": 300,
+      "timelineOrder": null,
+      "startAt": null,
+      "endAt": null
+    },
+    {
+      "id": "sync-engine",
+      "title": "BoardSyncEngine & Drive Sync",
+      "content": "5-rule offline LWW merge, symmetric edge deduplication, conflict resolution, and Google Drive adapter.",
+      "cardType": "task",
+      "status": "in_progress",
+      "tags": ["sync", "lww", "gdrive"],
+      "posX": 840,
+      "posY": 300,
+      "timelineOrder": null,
+      "startAt": null,
+      "endAt": null
+    },
+    {
+      "id": "ai-agents",
+      "title": "AI Agents (Antigravity / LLM)",
+      "content": "External AI clients using `.agents/skills/ariadeck-mcp` to inspect, split, merge, and organize boards.",
+      "cardType": "idea",
+      "status": "done",
+      "tags": ["ai", "skill", "mcp"],
+      "posX": 80,
+      "posY": 560,
+      "timelineOrder": null,
+      "startAt": null,
+      "endAt": null
+    },
+    {
+      "id": "sqlite",
+      "title": "SQLite Storage (ariadeck.db)",
+      "content": "Owner-private (`0600`) SQLite WAL database under `~/.local/share/ariadeck/` with schema v2 migrations.",
+      "cardType": "note",
+      "status": "done",
+      "tags": ["sqlite", "xdg", "storage"],
+      "posX": 460,
+      "posY": 560,
+      "timelineOrder": null,
+      "startAt": null,
+      "endAt": null
+    }
+  ],
+  "edges": [
+    {
+      "sourceCardId": "desktop",
+      "targetCardId": "mcp-server",
+      "relationType": "custom",
+      "direction": "bidirectional",
+      "label": "REST + SSE live sync",
+      "styleVariant": "solid",
+      "color": "#818cf8"
+    },
+    {
+      "sourceCardId": "ai-agents",
+      "targetCardId": "mcp-server",
+      "relationType": "custom",
+      "direction": "bidirectional",
+      "label": "MCP stdio / HTTP",
+      "styleVariant": "solid",
+      "color": "#a855f7"
+    },
+    {
+      "sourceCardId": "mcp-server",
+      "targetCardId": "core",
+      "relationType": "blocks",
+      "direction": "directed",
+      "label": "delegates mutations",
+      "styleVariant": "solid",
+      "color": "#38bdf8"
+    },
+    {
+      "sourceCardId": "desktop",
+      "targetCardId": "core",
+      "relationType": "relates_to",
+      "direction": "undirected",
+      "label": "shared types & layout",
+      "styleVariant": "dotted",
+      "color": "#2dd4bf"
+    },
+    {
+      "sourceCardId": "android",
+      "targetCardId": "core",
+      "relationType": "blocks",
+      "direction": "directed",
+      "label": "local-first graph engine",
+      "styleVariant": "solid",
+      "color": "#38bdf8"
+    },
+    {
+      "sourceCardId": "core",
+      "targetCardId": "sqlite",
+      "relationType": "custom",
+      "direction": "bidirectional",
+      "label": "transactional CRUD",
+      "styleVariant": "solid",
+      "color": "#10b981"
+    },
+    {
+      "sourceCardId": "core",
+      "targetCardId": "sync-engine",
+      "relationType": "custom",
+      "direction": "bidirectional",
+      "label": "outbox & LWW merge",
+      "styleVariant": "dashed",
+      "color": "#f59e0b"
+    },
+    {
+      "sourceCardId": "android",
+      "targetCardId": "sync-engine",
+      "relationType": "custom",
+      "direction": "bidirectional",
+      "label": "offline snapshot sync",
+      "styleVariant": "dashed",
+      "color": "#f59e0b"
+    },
+    {
+      "sourceCardId": "desktop",
+      "targetCardId": "json-md",
+      "relationType": "custom",
+      "direction": "bidirectional",
+      "label": "Import / Export",
+      "styleVariant": "solid",
+      "color": "#38bdf8"
+    },
+    {
+      "sourceCardId": "core",
+      "targetCardId": "json-md",
+      "relationType": "relates_to",
+      "direction": "undirected",
+      "label": "schema v1 validator",
+      "styleVariant": "dotted",
+      "color": "#94a3b8"
+    },
+    {
+      "sourceCardId": "ai-agents",
+      "targetCardId": "json-md",
+      "relationType": "relates_to",
+      "direction": "directed",
+      "label": "template exchange",
+      "styleVariant": "dashed",
+      "color": "#2dd4bf"
+    }
+  ],
+  "attachments": []
+}
