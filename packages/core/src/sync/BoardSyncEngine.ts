@@ -1,6 +1,7 @@
 import { NotFoundError, ValidationError } from '../errors.js';
 import type { GraphEventBus } from '../events/GraphEventBus.js';
 import type { StorageAdapter } from '../storage/StorageAdapter.js';
+import { canonicalizeEdgeEndpoints } from '../timeline/timelineLayout.js';
 import type {
   Board,
   Card,
@@ -198,11 +199,23 @@ export class BoardSyncEngine {
       }
     }
 
-    // 3. Merge Edges via LWW, then apply Lineage Re-routing (Rule 2) & Tombstone cleanup (Rule 4)
-    const localEdgeMap = new Map(localEdges.map((e) => [e.id, e]));
-    const remoteEdgeMap = new Map((remoteSnapshot?.edges ?? []).map((e) => [e.id, e]));
+    // 3. Merge Edges via LWW, canonicalizing symmetric endpoints and applying
+    //    Lineage Re-routing (Rule 2) & Tombstone cleanup (Rule 4)
+    const canonicalize = (e: Edge): Edge => {
+      const dir = e.direction ?? 'directed';
+      const endpoints = canonicalizeEdgeEndpoints(e.sourceCardId, e.targetCardId, dir);
+      if (endpoints.sourceCardId === e.sourceCardId && endpoints.targetCardId === e.targetCardId) {
+        return e;
+      }
+      return { ...e, sourceCardId: endpoints.sourceCardId, targetCardId: endpoints.targetCardId };
+    };
+
+    const localEdgeMap = new Map(localEdges.map((e) => [e.id, canonicalize(e)]));
+    const remoteEdgeMap = new Map((remoteSnapshot?.edges ?? []).map((e) => [e.id, canonicalize(e)]));
     const allEdgeIds = new Set([...localEdgeMap.keys(), ...remoteEdgeMap.keys()]);
     const mergedEdgeMap = new Map<string, Edge>();
+    const activeTupleWinner = new Map<string, Edge>();
+    const effectiveBoardType = mergedBoard.boardType ?? 'flow';
 
     for (const edgeId of allEdgeIds) {
       const l = localEdgeMap.get(edgeId);
@@ -226,6 +239,10 @@ export class BoardSyncEngine {
 
         const sourceCard = resolvedSource ? mergedCardMap.get(resolvedSource) : undefined;
         const targetCard = resolvedTarget ? mergedCardMap.get(resolvedTarget) : undefined;
+        const allowsSelfLoop =
+          edge.relationType === 'jump_back' ||
+          (effectiveBoardType === 'flat' &&
+            (edge.relationType === 'relates_to' || edge.relationType === 'custom'));
 
         // Rule 4: Edge referencing a deleted card with no active lineage replacement -> soft-delete
         if (
@@ -233,7 +250,7 @@ export class BoardSyncEngine {
           !targetCard ||
           sourceCard.deletedAt !== null ||
           targetCard.deletedAt !== null ||
-          resolvedSource === resolvedTarget
+          (resolvedSource === resolvedTarget && !allowsSelfLoop)
         ) {
           edge = {
             ...edge,
@@ -242,29 +259,76 @@ export class BoardSyncEngine {
             updatedByDeviceId: this.deviceId,
             version: edge.version + 1,
           };
-        } else if (
-          resolvedSource !== edge.sourceCardId ||
-          resolvedTarget !== edge.targetCardId
-        ) {
-          // Rule 2: Re-route edge to split/merged replacement card
-          edge = {
-            ...edge,
-            sourceCardId: resolvedSource!,
-            targetCardId: resolvedTarget!,
-            updatedAt: syncedAt,
-            updatedByDeviceId: this.deviceId,
-            version: edge.version + 1,
-          };
-          reroutedEdgeIds.push(edge.id);
+        } else {
+          const dir = edge.direction ?? 'directed';
+          const nextEndpoints = canonicalizeEdgeEndpoints(resolvedSource!, resolvedTarget!, dir);
+          if (
+            nextEndpoints.sourceCardId !== edge.sourceCardId ||
+            nextEndpoints.targetCardId !== edge.targetCardId
+          ) {
+            // Rule 2: Re-route edge to split/merged replacement card
+            edge = {
+              ...edge,
+              sourceCardId: nextEndpoints.sourceCardId,
+              targetCardId: nextEndpoints.targetCardId,
+              updatedAt: syncedAt,
+              updatedByDeviceId: this.deviceId,
+              version: edge.version + 1,
+            };
+            reroutedEdgeIds.push(edge.id);
+          }
+
+          // Board-type conflict demotion: if winning board is 'flow', demote flat-only edges
+          if (effectiveBoardType === 'flow') {
+            const currentDir = edge.direction ?? 'directed';
+            if (currentDir !== 'directed' || edge.relationType === 'custom') {
+              edge = {
+                ...edge,
+                direction: 'directed',
+                relationType: 'relates_to',
+                updatedAt: syncedAt,
+                updatedByDeviceId: this.deviceId,
+                version: edge.version + 1,
+              };
+            }
+          }
+
+          // Deduplicate canonicalized symmetric/identical edges created offline on different devices
+          const tupleKey = `${edge.sourceCardId}::${edge.targetCardId}::${edge.relationType}::${edge.direction ?? 'directed'}`;
+          const prevWinner = activeTupleWinner.get(tupleKey);
+          if (prevWinner && prevWinner.id !== edge.id) {
+            if (compareSyncMetadata(edge, prevWinner) > 0) {
+              mergedEdgeMap.set(prevWinner.id, {
+                ...prevWinner,
+                deletedAt: syncedAt,
+                updatedAt: syncedAt,
+                updatedByDeviceId: this.deviceId,
+                version: prevWinner.version + 1,
+              });
+              activeTupleWinner.set(tupleKey, edge);
+            } else {
+              edge = {
+                ...edge,
+                deletedAt: syncedAt,
+                updatedAt: syncedAt,
+                updatedByDeviceId: this.deviceId,
+                version: edge.version + 1,
+              };
+            }
+          } else {
+            activeTupleWinner.set(tupleKey, edge);
+          }
         }
       }
 
       mergedEdgeMap.set(edge.id, edge);
     }
 
-    // 4. Rule 3: Post-merge full-board DAG cycle check -> flag newest cycle edge as conflicted
-    const cycleEdgeIds = this.detectAndFlagCycles(mergedEdgeMap, syncedAt, boardId, newConflicts);
-    flaggedCyclicEdgeIds.push(...cycleEdgeIds);
+    // 4. Rule 3: Post-merge DAG cycle check (flow boards only, temporal edges only)
+    if (effectiveBoardType === 'flow') {
+      const cycleEdgeIds = this.detectAndFlagCycles(mergedEdgeMap, syncedAt, boardId, newConflicts);
+      flaggedCyclicEdgeIds.push(...cycleEdgeIds);
+    }
 
     // 5. Rule 5: Merge CardAttachments via LWW (syncing transcripts even while binary is local_only)
     const localAttMap = new Map(localAttachments.map((a) => [a.id, a]));

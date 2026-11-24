@@ -1,18 +1,35 @@
 import { CyclicDependencyError, ValidationError } from '../errors.js';
+import { canonicalizeEdgeEndpoints } from '../timeline/timelineLayout.js';
 import type {
   AttachmentKind,
   BoardGraph,
+  BoardType,
   CardStatus,
   CardType,
+  EdgeDirection,
+  EdgeStyleVariant,
   RelationType,
 } from '../types/models.js';
 
 export const BOARD_JSON_FORMAT = 'ariadeck-board' as const;
 export const BOARD_JSON_SCHEMA_VERSION = 1 as const;
 
+const VALID_BOARD_TYPES = new Set<BoardType>(['flow', 'flat']);
 const VALID_CARD_TYPES = new Set<CardType>(['task', 'idea', 'plot_event', 'note']);
 const VALID_CARD_STATUSES = new Set<CardStatus>(['todo', 'in_progress', 'done', 'archived']);
-const VALID_RELATION_TYPES = new Set<RelationType>(['blocks', 'causes', 'relates_to']);
+const VALID_RELATION_TYPES = new Set<RelationType>([
+  'blocks',
+  'causes',
+  'relates_to',
+  'jump_back',
+  'custom',
+]);
+const VALID_EDGE_DIRECTIONS = new Set<EdgeDirection>([
+  'directed',
+  'bidirectional',
+  'undirected',
+]);
+const VALID_EDGE_STYLES = new Set<EdgeStyleVariant>(['solid', 'dashed', 'dotted']);
 const VALID_ATTACHMENT_KINDS = new Set<AttachmentKind>(['image', 'audio']);
 
 export interface BoardJsonCard {
@@ -33,7 +50,10 @@ export interface BoardJsonEdge {
   sourceCardId: string;
   targetCardId: string;
   relationType: RelationType;
+  direction?: EdgeDirection;
   label?: string;
+  styleVariant?: EdgeStyleVariant;
+  color?: string | null;
 }
 
 export interface BoardJsonAttachment {
@@ -53,6 +73,7 @@ export interface BoardJsonExport {
   board: {
     title: string;
     description: string;
+    boardType?: BoardType;
   };
   cards: BoardJsonCard[];
   edges: BoardJsonEdge[];
@@ -95,6 +116,7 @@ export function renderBoardGraphToJson(
     board: {
       title: graph.board.title,
       description: graph.board.description,
+      boardType: graph.board.boardType ?? 'flow',
     },
     cards: graph.cards.map((c) => ({
       id: c.id,
@@ -113,7 +135,10 @@ export function renderBoardGraphToJson(
       sourceCardId: e.sourceCardId,
       targetCardId: e.targetCardId,
       relationType: e.relationType,
+      ...(e.direction && e.direction !== 'directed' ? { direction: e.direction } : {}),
       ...(e.label !== undefined ? { label: e.label } : {}),
+      ...(e.styleVariant && e.styleVariant !== 'solid' ? { styleVariant: e.styleVariant } : {}),
+      ...(e.color !== undefined && e.color !== null ? { color: e.color } : {}),
     })),
     attachments: graph.attachments.map((a) => ({
       cardId: a.cardId,
@@ -169,6 +194,7 @@ export function parseAndValidateBoardJson(input: string | unknown): BoardJsonExp
 
   let boardTitle = '';
   let boardDescription = '';
+  let boardType: BoardType = 'flow';
   if (!isPlainObject(raw.board)) {
     errors.push('board: must be an object.');
   } else {
@@ -181,6 +207,16 @@ export function parseAndValidateBoardJson(input: string | unknown): BoardJsonExp
       errors.push('board.description: must be a string.');
     } else {
       boardDescription = (raw.board.description as string | undefined) ?? '';
+    }
+    if (raw.board.boardType !== undefined) {
+      if (
+        typeof raw.board.boardType !== 'string' ||
+        !VALID_BOARD_TYPES.has(raw.board.boardType as BoardType)
+      ) {
+        errors.push(`board.boardType: invalid value "${String(raw.board.boardType)}".`);
+      } else {
+        boardType = raw.board.boardType as BoardType;
+      }
     }
   }
 
@@ -316,14 +352,47 @@ export function parseAndValidateBoardJson(input: string | unknown): BoardJsonExp
         errors.push(`${prefix}.targetCardId: references unknown card "${targetCardId}".`);
         return;
       }
-      if (sourceCardId === targetCardId) {
+      const relationType = (item.relationType ?? 'blocks') as RelationType;
+      if (!VALID_RELATION_TYPES.has(relationType)) {
+        errors.push(`${prefix}.relationType: invalid value "${String(item.relationType)}".`);
+        return;
+      }
+
+      const direction = (item.direction ?? 'directed') as EdgeDirection;
+      if (!VALID_EDGE_DIRECTIONS.has(direction)) {
+        errors.push(`${prefix}.direction: invalid value "${String(item.direction)}".`);
+        return;
+      }
+
+      const styleVariant = (
+        item.styleVariant ?? (relationType === 'jump_back' ? 'dashed' : 'solid')
+      ) as EdgeStyleVariant;
+      if (!VALID_EDGE_STYLES.has(styleVariant)) {
+        errors.push(`${prefix}.styleVariant: invalid value "${String(item.styleVariant)}".`);
+        return;
+      }
+
+      if (item.color !== undefined && item.color !== null && typeof item.color !== 'string') {
+        errors.push(`${prefix}.color: must be a string or null.`);
+        return;
+      }
+
+      const allowsSelfLoop =
+        (boardType === 'flow' && relationType === 'jump_back') ||
+        (boardType === 'flat' && (relationType === 'relates_to' || relationType === 'custom'));
+      if (sourceCardId === targetCardId && !allowsSelfLoop) {
         errors.push(`${prefix}: self-loop on card "${sourceCardId}" is not allowed.`);
         return;
       }
 
-      const relationType = (item.relationType ?? 'blocks') as RelationType;
-      if (!VALID_RELATION_TYPES.has(relationType)) {
-        errors.push(`${prefix}.relationType: invalid value "${String(item.relationType)}".`);
+      if (boardType === 'flow' && (direction !== 'directed' || relationType === 'custom')) {
+        errors.push(
+          `${prefix}: direction "${direction}" with relationType "${relationType}" is not allowed on flow boards.`
+        );
+        return;
+      }
+      if (boardType === 'flat' && relationType === 'jump_back') {
+        errors.push(`${prefix}: relationType "jump_back" is only allowed on flow boards.`);
         return;
       }
 
@@ -332,16 +401,20 @@ export function parseAndValidateBoardJson(input: string | unknown): BoardJsonExp
         return;
       }
 
-      const triple = `${sourceCardId}::${targetCardId}::${relationType}`;
-      if (seenEdgeTriples.has(triple)) {
+      const canonical = canonicalizeEdgeEndpoints(sourceCardId, targetCardId, direction);
+      const tupleKey = `${canonical.sourceCardId}::${canonical.targetCardId}::${relationType}::${direction}`;
+      if (seenEdgeTriples.has(tupleKey)) {
         return; // Deduplicate identical edges cleanly
       }
-      seenEdgeTriples.add(triple);
+      seenEdgeTriples.add(tupleKey);
 
       edges.push({
-        sourceCardId,
-        targetCardId,
+        sourceCardId: canonical.sourceCardId,
+        targetCardId: canonical.targetCardId,
         relationType,
+        direction,
+        styleVariant,
+        ...(item.color !== undefined ? { color: item.color as string | null } : {}),
         ...(item.label !== undefined ? { label: item.label } : {}),
       });
     });
@@ -408,8 +481,10 @@ export function parseAndValidateBoardJson(input: string | unknown): BoardJsonExp
     throw new ValidationError(`Invalid Ariadeck board JSON:\n- ${errors.join('\n- ')}`);
   }
 
-  // Validate DAG acyclicity across all blocks/causes edges
-  verifyEdgesAcyclic(edges);
+  // Validate DAG acyclicity across directed blocks/causes edges on flow boards only
+  if (boardType === 'flow') {
+    verifyEdgesAcyclic(edges);
+  }
 
   return {
     format: BOARD_JSON_FORMAT,
@@ -419,6 +494,7 @@ export function parseAndValidateBoardJson(input: string | unknown): BoardJsonExp
     board: {
       title: boardTitle,
       description: boardDescription,
+      boardType,
     },
     cards,
     edges,

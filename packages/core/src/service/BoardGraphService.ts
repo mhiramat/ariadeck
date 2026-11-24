@@ -1,10 +1,18 @@
-import { CyclicDependencyError, NotFoundError, ValidationError } from '../errors.js';
+import {
+  BoardConversionError,
+  CyclicDependencyError,
+  NotFoundError,
+  ValidationError,
+} from '../errors.js';
 import { GraphEventBus, type GraphEventType } from '../events/GraphEventBus.js';
 import type { StorageAdapter } from '../storage/StorageAdapter.js';
 import {
+  canonicalizeEdgeEndpoints,
   computeTopologicalSteps,
+  detectJumpBackWarnings,
   detectTimelineViolations,
   groupCardsByTimelineStep,
+  hasTemporalCycle,
 } from '../timeline/timelineLayout.js';
 import {
   renderBoardGraphToMarkdown,
@@ -20,19 +28,26 @@ import {
 } from '../export/jsonExportImport.js';
 import type {
   Board,
+  BoardConversionAnalysis,
+  BoardConversionStrategy,
   BoardGraph,
+  BoardType,
   Card,
   CardAttachment,
+  ConnectCardsOptions,
   CreateAttachmentInput,
   CreateBoardInput,
   CreateCardInput,
   Edge,
+  EdgeDirection,
+  EdgeStyleVariant,
   InsertIntermediateCardInput,
   MergeCardsParams,
   MutationContext,
   RelationType,
   SplitCardParams,
   SplitCardResult,
+  SplitEdgeInheritance,
   SyncOutboxEntityType,
   SyncOutboxOperation,
   TimelineSortResult,
@@ -149,6 +164,7 @@ export class BoardGraphService {
       id: input.id ?? this.generateId(),
       title,
       description: input.description ?? '',
+      boardType: input.boardType ?? 'flow',
       createdAt: timestamp,
       updatedAt: timestamp,
       updatedByDeviceId: deviceId,
@@ -411,14 +427,23 @@ export class BoardGraphService {
     sourceId: string,
     targetId: string,
     relationType: RelationType = 'blocks',
-    label?: string,
+    labelOrOptions?: string | ConnectCardsOptions,
     ctx?: MutationContext
   ): Promise<Edge> {
-    if (sourceId === targetId) {
-      throw new CyclicDependencyError(sourceId, targetId);
-    }
+    const opts: ConnectCardsOptions =
+      typeof labelOrOptions === 'string'
+        ? { label: labelOrOptions }
+        : (labelOrOptions ?? {});
+    const direction: EdgeDirection = opts.direction ?? 'directed';
+    const styleVariant: EdgeStyleVariant =
+      opts.styleVariant ?? (relationType === 'jump_back' ? 'dashed' : 'solid');
+    const color = opts.color ?? null;
 
-    await this.getBoard(boardId);
+    const board = await this.getBoard(boardId);
+    const boardType: BoardType = board.boardType ?? 'flow';
+
+    this.validateEdgeForBoardType(boardType, sourceId, targetId, relationType, direction);
+
     const [sourceCard, targetCard] = await Promise.all([
       this.storage.getCard(sourceId, false),
       this.storage.getCard(targetId, false),
@@ -431,34 +456,49 @@ export class BoardGraphService {
       throw new NotFoundError('Card', targetId);
     }
 
+    const canonical = canonicalizeEdgeEndpoints(sourceId, targetId, direction);
     const existingEdges = await this.storage.listEdgesByBoard(boardId, false);
 
-    // Deduplicate identical (sourceId, targetId, relationType) triples.
+    // Deduplicate identical (sourceId, targetId, relationType, direction) tuples.
     const duplicate = existingEdges.find(
       (e) =>
-        e.sourceCardId === sourceId &&
-        e.targetCardId === targetId &&
-        e.relationType === relationType
+        e.sourceCardId === canonical.sourceCardId &&
+        e.targetCardId === canonical.targetCardId &&
+        e.relationType === relationType &&
+        (e.direction ?? 'directed') === direction
     );
     if (duplicate) {
       return duplicate;
     }
 
-    if (relationType === 'blocks' || relationType === 'causes') {
+    if (
+      boardType === 'flow' &&
+      direction === 'directed' &&
+      (relationType === 'blocks' || relationType === 'causes')
+    ) {
       if (this.hasDirectedPath(existingEdges, targetId, sourceId)) {
-        throw new CyclicDependencyError(sourceId, targetId);
+        throw new CyclicDependencyError(
+          sourceId,
+          targetId,
+          undefined,
+          'ERR_TEMPORAL_CYCLE_DETECTED'
+        );
       }
     }
 
     const timestamp = this.now();
     const deviceId = this.resolveDeviceId(ctx);
+    const trimmedLabel = opts.label?.trim();
     const edge: Edge = {
       id: this.generateId(),
       boardId,
-      sourceCardId: sourceId,
-      targetCardId: targetId,
+      sourceCardId: canonical.sourceCardId,
+      targetCardId: canonical.targetCardId,
       relationType,
-      ...(label !== undefined ? { label } : {}),
+      direction,
+      ...(trimmedLabel ? { label: trimmedLabel } : {}),
+      styleVariant,
+      color,
       isConflicted: false,
       conflictReason: null,
       createdAt: timestamp,
@@ -487,27 +527,60 @@ export class BoardGraphService {
       throw new NotFoundError('Edge', edgeId);
     }
 
+    const board = await this.getBoard(existing.boardId);
+    const boardType: BoardType = board.boardType ?? 'flow';
     const nextRelationType = patch.relationType ?? existing.relationType;
+    const nextDirection: EdgeDirection = patch.direction ?? existing.direction ?? 'directed';
+    const nextStyleVariant: EdgeStyleVariant =
+      patch.styleVariant ??
+      existing.styleVariant ??
+      (nextRelationType === 'jump_back' ? 'dashed' : 'solid');
+    const nextColor = patch.color !== undefined ? patch.color : (existing.color ?? null);
+
+    this.validateEdgeForBoardType(
+      boardType,
+      existing.sourceCardId,
+      existing.targetCardId,
+      nextRelationType,
+      nextDirection
+    );
+
+    const canonical = canonicalizeEdgeEndpoints(
+      existing.sourceCardId,
+      existing.targetCardId,
+      nextDirection
+    );
     const otherEdges = (await this.storage.listEdgesByBoard(existing.boardId, false)).filter(
       (e) => e.id !== edgeId
     );
 
-    if (nextRelationType !== existing.relationType) {
+    const tupleChanged =
+      canonical.sourceCardId !== existing.sourceCardId ||
+      canonical.targetCardId !== existing.targetCardId ||
+      nextRelationType !== existing.relationType ||
+      nextDirection !== (existing.direction ?? 'directed');
+
+    if (tupleChanged) {
       const duplicate = otherEdges.find(
         (e) =>
-          e.sourceCardId === existing.sourceCardId &&
-          e.targetCardId === existing.targetCardId &&
-          e.relationType === nextRelationType
+          e.sourceCardId === canonical.sourceCardId &&
+          e.targetCardId === canonical.targetCardId &&
+          e.relationType === nextRelationType &&
+          (e.direction ?? 'directed') === nextDirection
       );
       if (duplicate) {
         throw new ValidationError(
-          `An edge with relationType "${nextRelationType}" already exists between these cards.`
+          `An edge with relationType "${nextRelationType}" and direction "${nextDirection}" already exists between these cards.`
         );
       }
 
-      if (nextRelationType === 'blocks' || nextRelationType === 'causes') {
-        if (this.hasDirectedPath(otherEdges, existing.targetCardId, existing.sourceCardId)) {
-          throw new CyclicDependencyError(existing.sourceCardId, existing.targetCardId);
+      if (
+        boardType === 'flow' &&
+        nextDirection === 'directed' &&
+        (nextRelationType === 'blocks' || nextRelationType === 'causes')
+      ) {
+        if (this.hasDirectedPath(otherEdges, canonical.targetCardId, canonical.sourceCardId)) {
+          throw new CyclicDependencyError(canonical.sourceCardId, canonical.targetCardId);
         }
       }
     }
@@ -516,7 +589,12 @@ export class BoardGraphService {
     const deviceId = this.resolveDeviceId(ctx);
     const updated: Edge = {
       ...existing,
+      sourceCardId: canonical.sourceCardId,
+      targetCardId: canonical.targetCardId,
       relationType: nextRelationType,
+      direction: nextDirection,
+      styleVariant: nextStyleVariant,
+      color: nextColor,
       updatedAt: timestamp,
       updatedByDeviceId: deviceId,
       version: existing.version + 1,
@@ -592,6 +670,17 @@ export class BoardGraphService {
     if (!parent) {
       throw new NotFoundError('Card', params.targetCardId);
     }
+    const board = await this.getBoard(parent.boardId);
+    const boardType: BoardType = board.boardType ?? 'flow';
+    const inheritance: SplitEdgeInheritance =
+      params.edgeInheritance ??
+      (params.linkMode === 'parallel'
+        ? 'broadcast'
+        : params.linkMode === 'sequential'
+          ? 'sequential'
+          : boardType === 'flat'
+            ? 'broadcast'
+            : 'sequential');
 
     const timestamp = this.now();
     const deviceId = this.resolveDeviceId(ctx);
@@ -602,18 +691,25 @@ export class BoardGraphService {
 
     await this.storage.runInTransaction(async () => {
       const boardEdges = await this.storage.listEdgesByBoard(parent.boardId, false);
-      const incomingEdges = boardEdges.filter((e) => e.targetCardId === parent.id);
-      const outgoingEdges = boardEdges.filter((e) => e.sourceCardId === parent.id);
+      const incomingEdges = boardEdges.filter(
+        (e) => e.targetCardId === parent.id && e.sourceCardId !== parent.id
+      );
+      const outgoingEdges = boardEdges.filter(
+        (e) => e.sourceCardId === parent.id && e.targetCardId !== parent.id
+      );
+      const selfLoopEdges = boardEdges.filter(
+        (e) => e.sourceCardId === parent.id && e.targetCardId === parent.id
+      );
 
       const count = params.subCards.length;
       for (let i = 0; i < count; i++) {
         const sub = params.subCards[i]!;
         const posX =
-          params.linkMode === 'sequential'
+          inheritance === 'sequential'
             ? parent.posX + i * DEFAULT_CARD_WIDTH
             : parent.posX;
         const posY =
-          params.linkMode === 'sequential'
+          inheritance === 'sequential'
             ? parent.posY
             : parent.posY + (i - (count - 1) / 2) * DEFAULT_CARD_HEIGHT;
 
@@ -644,19 +740,34 @@ export class BoardGraphService {
         createdCards.push(child);
       }
 
+      const seenNewKeys = new Set<string>();
       const saveNewEdge = async (
         sourceCardId: string,
         targetCardId: string,
         relationType: RelationType,
-        label?: string
+        opts?: {
+          direction?: EdgeDirection;
+          label?: string;
+          styleVariant?: EdgeStyleVariant;
+          color?: string | null;
+        }
       ): Promise<void> => {
+        const direction = opts?.direction ?? 'directed';
+        const canonical = canonicalizeEdgeEndpoints(sourceCardId, targetCardId, direction);
+        const key = `${canonical.sourceCardId}::${canonical.targetCardId}::${relationType}::${direction}`;
+        if (seenNewKeys.has(key)) return;
+        seenNewKeys.add(key);
+
         const edge: Edge = {
           id: this.generateId(),
           boardId: parent.boardId,
-          sourceCardId,
-          targetCardId,
+          sourceCardId: canonical.sourceCardId,
+          targetCardId: canonical.targetCardId,
           relationType,
-          ...(label !== undefined ? { label } : {}),
+          direction,
+          ...(opts?.label !== undefined ? { label: opts.label } : {}),
+          styleVariant: opts?.styleVariant ?? (relationType === 'jump_back' ? 'dashed' : 'solid'),
+          color: opts?.color ?? null,
           isConflicted: false,
           conflictReason: null,
           createdAt: timestamp,
@@ -670,30 +781,60 @@ export class BoardGraphService {
         createdEdges.push(edge);
       };
 
-      if (params.linkMode === 'sequential') {
+      if (inheritance === 'sequential') {
         for (let i = 0; i < createdCards.length - 1; i++) {
           await saveNewEdge(createdCards[i]!.id, createdCards[i + 1]!.id, 'blocks');
         }
         const firstChild = createdCards[0]!;
         const lastChild = createdCards[createdCards.length - 1]!;
         for (const inc of incomingEdges) {
-          await saveNewEdge(inc.sourceCardId, firstChild.id, inc.relationType, inc.label);
+          const target = inc.relationType === 'jump_back' ? lastChild.id : firstChild.id;
+          await saveNewEdge(inc.sourceCardId, target, inc.relationType, {
+            direction: inc.direction,
+            label: inc.label,
+            styleVariant: inc.styleVariant,
+            color: inc.color,
+          });
         }
         for (const out of outgoingEdges) {
-          await saveNewEdge(lastChild.id, out.targetCardId, out.relationType, out.label);
+          const source = out.relationType === 'jump_back' ? firstChild.id : lastChild.id;
+          await saveNewEdge(source, out.targetCardId, out.relationType, {
+            direction: out.direction,
+            label: out.label,
+            styleVariant: out.styleVariant,
+            color: out.color,
+          });
         }
-      } else {
+        for (const loop of selfLoopEdges) {
+          await saveNewEdge(lastChild.id, firstChild.id, loop.relationType, {
+            direction: loop.direction,
+            label: loop.label,
+            styleVariant: loop.styleVariant,
+            color: loop.color,
+          });
+        }
+      } else if (inheritance === 'broadcast') {
         for (const child of createdCards) {
           for (const inc of incomingEdges) {
-            await saveNewEdge(inc.sourceCardId, child.id, inc.relationType, inc.label);
+            await saveNewEdge(inc.sourceCardId, child.id, inc.relationType, {
+              direction: inc.direction,
+              label: inc.label,
+              styleVariant: inc.styleVariant,
+              color: inc.color,
+            });
           }
           for (const out of outgoingEdges) {
-            await saveNewEdge(child.id, out.targetCardId, out.relationType, out.label);
+            await saveNewEdge(child.id, out.targetCardId, out.relationType, {
+              direction: out.direction,
+              label: out.label,
+              styleVariant: out.styleVariant,
+              color: out.color,
+            });
           }
         }
       }
 
-      for (const oldEdge of [...incomingEdges, ...outgoingEdges]) {
+      for (const oldEdge of [...incomingEdges, ...outgoingEdges, ...selfLoopEdges]) {
         const deletedEdge: Edge = {
           ...oldEdge,
           updatedAt: timestamp,
@@ -730,7 +871,8 @@ export class BoardGraphService {
         {
           parentCardId: updatedParent.id,
           replacedByCardIds: updatedParent.replacedByCardIds,
-          linkMode: params.linkMode,
+          linkMode: params.linkMode ?? (inheritance === 'sequential' ? 'sequential' : 'parallel'),
+          edgeInheritance: inheritance,
         },
         timestamp
       );
@@ -817,6 +959,9 @@ export class BoardGraphService {
       deletedAt: null,
     };
 
+    const board = await this.getBoard(boardId);
+    const boardType: BoardType = board.boardType ?? 'flow';
+
     await this.storage.runInTransaction(async () => {
       const boardEdges = await this.storage.listEdgesByBoard(boardId, false);
       const externalIncoming: Edge[] = [];
@@ -841,27 +986,31 @@ export class BoardGraphService {
       await this.storage.saveCard(merged);
       await this.recordOutbox('card', merged.id, boardId, 'create', merged, timestamp);
 
-      const seenTriples = new Set<string>();
+      const seenTuples = new Set<string>();
       const newEdges: Edge[] = [];
 
       const queueRewiredEdge = (
         sourceCardId: string,
         targetCardId: string,
-        relationType: RelationType,
-        label?: string
+        edgeTemplate: Edge
       ): void => {
-        const key = `${sourceCardId}::${targetCardId}::${relationType}`;
-        if (seenTriples.has(key)) {
+        const direction = edgeTemplate.direction ?? 'directed';
+        const canonical = canonicalizeEdgeEndpoints(sourceCardId, targetCardId, direction);
+        const key = `${canonical.sourceCardId}::${canonical.targetCardId}::${edgeTemplate.relationType}::${direction}`;
+        if (seenTuples.has(key)) {
           return;
         }
-        seenTriples.add(key);
+        seenTuples.add(key);
         newEdges.push({
           id: this.generateId(),
           boardId,
-          sourceCardId,
-          targetCardId,
-          relationType,
-          ...(label !== undefined ? { label } : {}),
+          sourceCardId: canonical.sourceCardId,
+          targetCardId: canonical.targetCardId,
+          relationType: edgeTemplate.relationType,
+          direction,
+          ...(edgeTemplate.label !== undefined ? { label: edgeTemplate.label } : {}),
+          styleVariant: edgeTemplate.styleVariant ?? 'solid',
+          color: edgeTemplate.color ?? null,
           isConflicted: false,
           conflictReason: null,
           createdAt: timestamp,
@@ -873,23 +1022,28 @@ export class BoardGraphService {
       };
 
       for (const inc of externalIncoming) {
-        queueRewiredEdge(inc.sourceCardId, merged.id, inc.relationType, inc.label);
+        queueRewiredEdge(inc.sourceCardId, merged.id, inc);
       }
       for (const out of externalOutgoing) {
-        queueRewiredEdge(merged.id, out.targetCardId, out.relationType, out.label);
+        queueRewiredEdge(merged.id, out.targetCardId, out);
       }
 
-      // Verify that merging does not introduce a cycle in the DAG.
-      const candidateEdges = [...untouchedEdges, ...newEdges];
-      for (const edge of newEdges) {
-        if (edge.relationType === 'blocks' || edge.relationType === 'causes') {
-          const withoutSelf = candidateEdges.filter((e) => e.id !== edge.id);
-          if (this.hasDirectedPath(withoutSelf, edge.targetCardId, edge.sourceCardId)) {
-            throw new CyclicDependencyError(
-              edge.sourceCardId,
-              edge.targetCardId,
-              'Cannot merge the selected cards because re-wiring their external dependencies would introduce a cycle in the board DAG.'
-            );
+      // Verify that merging does not introduce a temporal cycle on flow boards.
+      if (boardType === 'flow') {
+        const candidateEdges = [...untouchedEdges, ...newEdges];
+        for (const edge of newEdges) {
+          if (
+            (edge.direction ?? 'directed') === 'directed' &&
+            (edge.relationType === 'blocks' || edge.relationType === 'causes')
+          ) {
+            const withoutSelf = candidateEdges.filter((e) => e.id !== edge.id);
+            if (this.hasDirectedPath(withoutSelf, edge.targetCardId, edge.sourceCardId)) {
+              throw new CyclicDependencyError(
+                edge.sourceCardId,
+                edge.targetCardId,
+                'Cannot merge the selected cards because re-wiring their external dependencies would introduce a cycle in the board DAG.'
+              );
+            }
           }
         }
       }
@@ -1058,50 +1212,247 @@ export class BoardGraphService {
 
   async computeTimelineLayout(
     boardId: string,
-    ctx?: MutationContext
+    ctx?: MutationContext,
+    options?: { applyToCards?: boolean }
   ): Promise<TimelineSortResult> {
-    await this.getBoard(boardId);
+    const board = await this.getBoard(boardId);
+    if ((board.boardType ?? 'flow') === 'flat') {
+      throw new ValidationError(
+        'Timeline computation is only supported on flow boards.',
+        'ERR_TIMELINE_NOT_SUPPORTED_ON_FLAT_BOARD'
+      );
+    }
+
     const [cards, edges] = await Promise.all([
       this.storage.listCardsByBoard(boardId, false),
       this.storage.listEdgesByBoard(boardId, false),
     ]);
 
+    const applyToCards = options?.applyToCards !== false;
     const stepMap = computeTopologicalSteps(cards, edges);
     const timestamp = this.now();
     const deviceId = this.resolveDeviceId(ctx);
     const updatedCards: Card[] = [];
     const changedCardIds: string[] = [];
 
-    await this.storage.runInTransaction(async () => {
-      for (const card of cards) {
-        const computedStep = stepMap.get(card.id) ?? 0;
-        if (card.timelineOrder !== computedStep) {
-          const updated: Card = {
-            ...card,
-            timelineOrder: computedStep,
-            updatedAt: timestamp,
-            updatedByDeviceId: deviceId,
-            version: card.version + 1,
-          };
-          await this.storage.saveCard(updated);
-          await this.recordOutbox('card', updated.id, boardId, 'update', updated, timestamp);
-          updatedCards.push(updated);
-          changedCardIds.push(updated.id);
-        } else {
-          updatedCards.push(card);
+    if (applyToCards) {
+      await this.storage.runInTransaction(async () => {
+        for (const card of cards) {
+          const computedStep = stepMap.get(card.id) ?? 0;
+          if (card.timelineOrder !== computedStep) {
+            const updated: Card = {
+              ...card,
+              timelineOrder: computedStep,
+              updatedAt: timestamp,
+              updatedByDeviceId: deviceId,
+              version: card.version + 1,
+            };
+            await this.storage.saveCard(updated);
+            await this.recordOutbox('card', updated.id, boardId, 'update', updated, timestamp);
+            updatedCards.push(updated);
+            changedCardIds.push(updated.id);
+          } else {
+            updatedCards.push(card);
+          }
         }
-      }
-    });
+      });
 
-    if (changedCardIds.length > 0) {
-      this.emitEvent('board:updated', boardId, changedCardIds, deviceId, timestamp);
+      if (changedCardIds.length > 0) {
+        this.emitEvent('board:updated', boardId, changedCardIds, deviceId, timestamp);
+      }
+    } else {
+      for (const card of cards) {
+        updatedCards.push({
+          ...card,
+          timelineOrder: card.timelineOrder ?? stepMap.get(card.id) ?? 0,
+        });
+      }
     }
+
+    const jumpBackEdges = edges.filter(
+      (e) => e.deletedAt === null && e.relationType === 'jump_back'
+    );
 
     return {
       boardId,
       steps: groupCardsByTimelineStep(updatedCards),
       violations: detectTimelineViolations(updatedCards, edges),
+      jumpBackEdges,
+      warnings: detectJumpBackWarnings(updatedCards, edges),
+      hasTemporalCycle: hasTemporalCycle(updatedCards, edges),
     };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Board Type Conversion (Phase 2: flow <-> flat)
+  // ---------------------------------------------------------------------------
+
+  async analyzeBoardTypeConversion(
+    boardId: string,
+    targetType: BoardType
+  ): Promise<BoardConversionAnalysis> {
+    const board = await this.getBoard(boardId);
+    const currentType: BoardType = board.boardType ?? 'flow';
+
+    if (currentType === targetType || targetType === 'flat') {
+      return {
+        boardId,
+        currentType,
+        targetType,
+        canConvertCleanly: true,
+        symmetricEdgeIds: [],
+        customRelationEdgeIds: [],
+        cycleEdgeIds: [],
+      };
+    }
+
+    // flat -> flow analysis
+    const edges = await this.storage.listEdgesByBoard(boardId, false);
+    const symmetricEdgeIds: string[] = [];
+    const customRelationEdgeIds: string[] = [];
+    const directedTemporalEdges: Edge[] = [];
+
+    for (const edge of edges) {
+      const dir = edge.direction ?? 'directed';
+      if (dir === 'undirected' || dir === 'bidirectional') {
+        symmetricEdgeIds.push(edge.id);
+      }
+      if (edge.relationType === 'custom') {
+        customRelationEdgeIds.push(edge.id);
+      }
+      if (
+        dir === 'directed' &&
+        (edge.relationType === 'blocks' || edge.relationType === 'causes')
+      ) {
+        directedTemporalEdges.push(edge);
+      }
+    }
+
+    // Find cycle-breaking edges among directed temporal edges
+    const cycleEdgeIds: string[] = [];
+    const accepted: Edge[] = [];
+    for (const edge of directedTemporalEdges) {
+      if (
+        edge.sourceCardId === edge.targetCardId ||
+        this.hasDirectedPath(accepted, edge.targetCardId, edge.sourceCardId)
+      ) {
+        cycleEdgeIds.push(edge.id);
+      } else {
+        accepted.push(edge);
+      }
+    }
+
+    return {
+      boardId,
+      currentType,
+      targetType,
+      canConvertCleanly:
+        symmetricEdgeIds.length === 0 &&
+        customRelationEdgeIds.length === 0 &&
+        cycleEdgeIds.length === 0,
+      symmetricEdgeIds,
+      customRelationEdgeIds,
+      cycleEdgeIds,
+    };
+  }
+
+  async convertBoardType(
+    boardId: string,
+    targetType: BoardType,
+    strategy: BoardConversionStrategy = 'abort',
+    ctx?: MutationContext
+  ): Promise<{ board: Board; analysis: BoardConversionAnalysis }> {
+    const board = await this.getBoard(boardId);
+    const analysis = await this.analyzeBoardTypeConversion(boardId, targetType);
+
+    if (analysis.currentType === targetType) {
+      return { board, analysis };
+    }
+
+    if (!analysis.canConvertCleanly && strategy === 'abort') {
+      throw new BoardConversionError(analysis);
+    }
+
+    const timestamp = this.now();
+    const deviceId = this.resolveDeviceId(ctx);
+    const edges = await this.storage.listEdgesByBoard(boardId, false);
+    const cycleEdgeSet = new Set(analysis.cycleEdgeIds);
+    const updatedBoard: Board = {
+      ...board,
+      boardType: targetType,
+      updatedAt: timestamp,
+      updatedByDeviceId: deviceId,
+      version: board.version + 1,
+    };
+
+    const touchedIds: string[] = [updatedBoard.id];
+
+    await this.storage.runInTransaction(async () => {
+      if (targetType === 'flat') {
+        // flow -> flat: convert jump_back edges to dashed relates_to so no link is lost
+        for (const edge of edges) {
+          if (edge.relationType === 'jump_back') {
+            const converted: Edge = {
+              ...edge,
+              relationType: 'relates_to',
+              styleVariant: 'dashed',
+              updatedAt: timestamp,
+              updatedByDeviceId: deviceId,
+              version: edge.version + 1,
+            };
+            await this.storage.saveEdge(converted);
+            await this.recordOutbox('edge', converted.id, boardId, 'update', converted, timestamp);
+            touchedIds.push(converted.id);
+          }
+        }
+      } else {
+        // flat -> flow (strategy === 'demote_incompatible' or clean)
+        for (const edge of edges) {
+          const dir = edge.direction ?? 'directed';
+          let nextEdge: Edge | null = null;
+
+          if (dir !== 'directed') {
+            nextEdge = {
+              ...edge,
+              direction: 'directed',
+              relationType: 'relates_to',
+              updatedAt: timestamp,
+              updatedByDeviceId: deviceId,
+              version: edge.version + 1,
+            };
+          } else if (edge.relationType === 'custom') {
+            nextEdge = {
+              ...edge,
+              relationType: 'relates_to',
+              updatedAt: timestamp,
+              updatedByDeviceId: deviceId,
+              version: edge.version + 1,
+            };
+          } else if (cycleEdgeSet.has(edge.id)) {
+            nextEdge = {
+              ...edge,
+              relationType: 'jump_back',
+              styleVariant: 'dashed',
+              updatedAt: timestamp,
+              updatedByDeviceId: deviceId,
+              version: edge.version + 1,
+            };
+          }
+
+          if (nextEdge) {
+            await this.storage.saveEdge(nextEdge);
+            await this.recordOutbox('edge', nextEdge.id, boardId, 'update', nextEdge, timestamp);
+            touchedIds.push(nextEdge.id);
+          }
+        }
+      }
+
+      await this.storage.saveBoard(updatedBoard);
+      await this.recordOutbox('board', updatedBoard.id, boardId, 'update', updatedBoard, timestamp);
+    });
+
+    this.emitEvent('board:updated', boardId, touchedIds, deviceId, timestamp);
+    return { board: updatedBoard, analysis };
   }
 
   // ---------------------------------------------------------------------------
@@ -1151,6 +1502,7 @@ export class BoardGraphService {
       id: newBoardId,
       title,
       description: validated.board.description,
+      boardType: validated.board.boardType ?? 'flow',
       createdAt: timestamp,
       updatedAt: timestamp,
       updatedByDeviceId: deviceId,
@@ -1186,21 +1538,33 @@ export class BoardGraphService {
       };
     });
 
-    const createdEdges: Edge[] = validated.edges.map((src) => ({
-      id: this.generateId(),
-      boardId: newBoardId,
-      sourceCardId: cardIdMap.get(src.sourceCardId)!,
-      targetCardId: cardIdMap.get(src.targetCardId)!,
-      relationType: src.relationType,
-      ...(src.label !== undefined ? { label: src.label } : {}),
-      isConflicted: false,
-      conflictReason: null,
-      createdAt: timestamp,
-      updatedAt: timestamp,
-      updatedByDeviceId: deviceId,
-      version: 1,
-      deletedAt: null,
-    }));
+    const createdEdges: Edge[] = validated.edges.map((src) => {
+      const direction = src.direction ?? 'directed';
+      const canonical = canonicalizeEdgeEndpoints(
+        cardIdMap.get(src.sourceCardId)!,
+        cardIdMap.get(src.targetCardId)!,
+        direction
+      );
+      return {
+        id: this.generateId(),
+        boardId: newBoardId,
+        sourceCardId: canonical.sourceCardId,
+        targetCardId: canonical.targetCardId,
+        relationType: src.relationType,
+        direction,
+        ...(src.label !== undefined ? { label: src.label } : {}),
+        styleVariant:
+          src.styleVariant ?? (src.relationType === 'jump_back' ? 'dashed' : 'solid'),
+        color: src.color ?? null,
+        isConflicted: false,
+        conflictReason: null,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        updatedByDeviceId: deviceId,
+        version: 1,
+        deletedAt: null,
+      };
+    });
 
     const createdAttachments: CardAttachment[] = validated.attachments.map((src) => ({
       id: this.generateId(),
@@ -1411,10 +1775,59 @@ export class BoardGraphService {
   // Internal helpers
   // ---------------------------------------------------------------------------
 
+  protected validateEdgeForBoardType(
+    boardType: BoardType,
+    sourceId: string,
+    targetId: string,
+    relationType: RelationType,
+    direction: EdgeDirection
+  ): void {
+    if (boardType === 'flow') {
+      if (direction !== 'directed') {
+        throw new ValidationError(
+          `Edge direction "${direction}" is only allowed on flat boards.`,
+          'ERR_INVALID_EDGE_FOR_BOARD_TYPE'
+        );
+      }
+      if (relationType === 'custom') {
+        throw new ValidationError(
+          'Relation type "custom" is only allowed on flat boards.',
+          'ERR_INVALID_EDGE_FOR_BOARD_TYPE'
+        );
+      }
+      if (sourceId === targetId && relationType !== 'jump_back') {
+        throw new CyclicDependencyError(
+          sourceId,
+          targetId,
+          `Self-loops are not allowed for "${relationType}" edges on flow boards.`,
+          'ERR_SELF_LOOP_NOT_ALLOWED'
+        );
+      }
+    } else {
+      if (relationType === 'jump_back') {
+        throw new ValidationError(
+          'Relation type "jump_back" is only allowed on flow boards.',
+          'ERR_INVALID_EDGE_FOR_BOARD_TYPE'
+        );
+      }
+      if (sourceId === targetId && (relationType === 'blocks' || relationType === 'causes')) {
+        throw new CyclicDependencyError(
+          sourceId,
+          targetId,
+          `Self-loops are not allowed for "${relationType}" edges.`,
+          'ERR_SELF_LOOP_NOT_ALLOWED'
+        );
+      }
+    }
+  }
+
   protected hasDirectedPath(edges: Edge[], startId: string, goalId: string): boolean {
     const adjacency = new Map<string, string[]>();
     for (const edge of edges) {
       if (edge.deletedAt !== null || edge.isConflicted) {
+        continue;
+      }
+      if ((edge.direction ?? 'directed') !== 'directed') {
         continue;
       }
       if (edge.relationType !== 'blocks' && edge.relationType !== 'causes') {

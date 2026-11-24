@@ -1,14 +1,38 @@
 import type {
   Card,
   Edge,
+  EdgeDirection,
+  JumpBackWarning,
   TimelineStepGroup,
   TimelineViolation,
 } from '../types/models.js';
 
-function isOrderingEdge(edge: Edge): boolean {
+/**
+ * Canonicalizes edge endpoints for symmetric directions ('undirected' and
+ * 'bidirectional') so that A --- B and B --- A map to the exact same key.
+ */
+export function canonicalizeEdgeEndpoints(
+  sourceCardId: string,
+  targetCardId: string,
+  direction: EdgeDirection = 'directed'
+): { sourceCardId: string; targetCardId: string } {
+  if (direction === 'undirected' || direction === 'bidirectional') {
+    return sourceCardId <= targetCardId
+      ? { sourceCardId, targetCardId }
+      : { sourceCardId: targetCardId, targetCardId: sourceCardId };
+  }
+  return { sourceCardId, targetCardId };
+}
+
+/**
+ * Returns true if the edge participates in temporal DAG cycle checking
+ * and topological timeline sorting on flow boards.
+ */
+export function isTemporalOrderingEdge(edge: Edge): boolean {
   return (
     edge.deletedAt === null &&
     !edge.isConflicted &&
+    (edge.direction ?? 'directed') === 'directed' &&
     (edge.relationType === 'blocks' || edge.relationType === 'causes')
   );
 }
@@ -22,15 +46,18 @@ function compareCardsWithinStep(a: Card, b: Card): number {
   } else if (!a.startAt && b.startAt) {
     return 1;
   }
+  if (a.posX !== b.posX) {
+    return a.posX - b.posX;
+  }
   const createdCmp = a.createdAt.localeCompare(b.createdAt);
   if (createdCmp !== 0) return createdCmp;
-  return a.title.localeCompare(b.title);
+  return a.id.localeCompare(b.id);
 }
 
 /**
  * Computes longest-path timeline step indices using Kahn's topological sort.
- * Conflicted edges and non-ordering 'relates_to' edges are ignored so cycles
- * never cause infinite loops.
+ * Only directed temporal edges ('blocks' / 'causes') participate; conflicted,
+ * 'relates_to', 'jump_back', and 'custom' edges are excluded.
  */
 export function computeTopologicalSteps(
   cards: Card[],
@@ -50,7 +77,7 @@ export function computeTopologicalSteps(
   }
 
   for (const edge of edges) {
-    if (!isOrderingEdge(edge)) continue;
+    if (!isTemporalOrderingEdge(edge)) continue;
     if (!cardIds.has(edge.sourceCardId) || !cardIds.has(edge.targetCardId)) continue;
     if (edge.sourceCardId === edge.targetCardId) continue;
 
@@ -103,6 +130,47 @@ export function computeTopologicalSteps(
 }
 
 /**
+ * Checks whether the directed temporal subgraph ('blocks' / 'causes') contains a cycle.
+ */
+export function hasTemporalCycle(cards: Card[], edges: Edge[]): boolean {
+  const activeCards = cards.filter((c) => c.deletedAt === null);
+  const cardIds = new Set(activeCards.map((c) => c.id));
+  const inDegree = new Map<string, number>();
+  const adjacency = new Map<string, string[]>();
+
+  for (const card of activeCards) {
+    inDegree.set(card.id, 0);
+    adjacency.set(card.id, []);
+  }
+
+  for (const edge of edges) {
+    if (!isTemporalOrderingEdge(edge)) continue;
+    if (!cardIds.has(edge.sourceCardId) || !cardIds.has(edge.targetCardId)) continue;
+    if (edge.sourceCardId === edge.targetCardId) return true;
+    adjacency.get(edge.sourceCardId)!.push(edge.targetCardId);
+    inDegree.set(edge.targetCardId, (inDegree.get(edge.targetCardId) ?? 0) + 1);
+  }
+
+  const queue: string[] = [];
+  for (const [id, deg] of inDegree) {
+    if (deg === 0) queue.push(id);
+  }
+
+  let visitedCount = 0;
+  for (let head = 0; head < queue.length; head++) {
+    const id = queue[head]!;
+    visitedCount += 1;
+    for (const next of adjacency.get(id) ?? []) {
+      const rem = (inDegree.get(next) ?? 1) - 1;
+      inDegree.set(next, rem);
+      if (rem === 0) queue.push(next);
+    }
+  }
+
+  return visitedCount < activeCards.length;
+}
+
+/**
  * Groups cards into ordered timeline step columns using each card's timelineOrder.
  */
 export function groupCardsByTimelineStep(cards: Card[]): TimelineStepGroup[] {
@@ -143,7 +211,7 @@ export function detectTimelineViolations(
 
   const violations: TimelineViolation[] = [];
   for (const edge of edges) {
-    if (!isOrderingEdge(edge)) continue;
+    if (!isTemporalOrderingEdge(edge)) continue;
     const source = cardById.get(edge.sourceCardId);
     const target = cardById.get(edge.targetCardId);
     if (!source || !target) continue;
@@ -162,4 +230,42 @@ export function detectTimelineViolations(
   }
 
   return violations;
+}
+
+/**
+ * Emits non-blocking soft warnings when an active jump_back edge points forward
+ * in timeline order (sourceStep < targetStep) instead of backward or to itself.
+ */
+export function detectJumpBackWarnings(
+  cards: Card[],
+  edges: Edge[]
+): JumpBackWarning[] {
+  const activeCards = cards.filter((c) => c.deletedAt === null);
+  const cardById = new Map(activeCards.map((c) => [c.id, c]));
+  const computedSteps = computeTopologicalSteps(activeCards, edges);
+
+  const warnings: JumpBackWarning[] = [];
+  for (const edge of edges) {
+    if (edge.deletedAt !== null || edge.relationType !== 'jump_back') continue;
+    const source = cardById.get(edge.sourceCardId);
+    const target = cardById.get(edge.targetCardId);
+    if (!source || !target) continue;
+
+    const sourceStep = source.timelineOrder ?? computedSteps.get(source.id) ?? 0;
+    const targetStep = target.timelineOrder ?? computedSteps.get(target.id) ?? 0;
+
+    if (sourceStep < targetStep) {
+      warnings.push({
+        edgeId: edge.id,
+        sourceCardId: source.id,
+        targetCardId: target.id,
+        sourceStep,
+        targetStep,
+        code: 'JUMP_BACK_POINTS_FORWARD',
+        message: `Jump-back edge from "${source.title}" (Step ${sourceStep}) to "${target.title}" (Step ${targetStep}) points forward in time.`,
+      });
+    }
+  }
+
+  return warnings;
 }

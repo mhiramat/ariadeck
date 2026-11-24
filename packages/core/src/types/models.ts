@@ -1,6 +1,12 @@
+export type BoardType = 'flow' | 'flat';
 export type CardType = 'task' | 'idea' | 'plot_event' | 'note';
 export type CardStatus = 'todo' | 'in_progress' | 'done' | 'archived';
-export type RelationType = 'blocks' | 'causes' | 'relates_to';
+export type RelationType = 'blocks' | 'causes' | 'relates_to' | 'jump_back' | 'custom';
+export type EdgeRelationType = RelationType;
+export type EdgeDirection = 'directed' | 'bidirectional' | 'undirected';
+export type EdgeStyleVariant = 'solid' | 'dashed' | 'dotted';
+export type SplitEdgeInheritance = 'sequential' | 'broadcast' | 'none';
+export type BoardConversionStrategy = 'abort' | 'demote_incompatible';
 export type AttachmentKind = 'image' | 'audio';
 export type AssetSyncStatus = 'local_only' | 'uploading' | 'synced' | 'missing_remote';
 
@@ -27,6 +33,7 @@ export interface Board extends SyncMetadata {
   id: string;
   title: string;
   description: string;
+  boardType?: BoardType;
 }
 
 /**
@@ -62,7 +69,10 @@ export interface Edge extends SyncMetadata {
   sourceCardId: string;
   targetCardId: string;
   relationType: RelationType;
+  direction?: EdgeDirection;
   label?: string;
+  styleVariant?: EdgeStyleVariant;
+  color?: string | null;
 
   isConflicted?: boolean;
   conflictReason?: string | null;
@@ -135,11 +145,19 @@ export interface CreateBoardInput {
   id?: string;
   title: string;
   description?: string;
+  boardType?: BoardType;
 }
 
 export interface UpdateBoardInput {
   title?: string;
   description?: string;
+}
+
+export interface ConnectCardsOptions {
+  direction?: EdgeDirection;
+  label?: string;
+  styleVariant?: EdgeStyleVariant;
+  color?: string | null;
 }
 
 export interface CreateCardInput {
@@ -172,7 +190,10 @@ export interface UpdateCardInput {
 
 export interface UpdateEdgeInput {
   relationType?: RelationType;
+  direction?: EdgeDirection;
   label?: string | null;
+  styleVariant?: EdgeStyleVariant;
+  color?: string | null;
 }
 
 export interface CreateAttachmentInput {
@@ -199,7 +220,8 @@ export interface SplitSubCardInput {
 export interface SplitCardParams {
   targetCardId: string;
   subCards: SplitSubCardInput[];
-  linkMode: 'sequential' | 'parallel';
+  linkMode?: 'sequential' | 'parallel';
+  edgeInheritance?: SplitEdgeInheritance;
 }
 
 export interface SplitCardResult {
@@ -249,10 +271,39 @@ export interface TimelineViolation {
 }
 
 /**
+ * Soft warning emitted when a jump_back edge points forward in timeline order.
+ */
+export interface JumpBackWarning {
+  edgeId: string;
+  sourceCardId: string;
+  targetCardId: string;
+  sourceStep: number;
+  targetStep: number;
+  code: 'JUMP_BACK_POINTS_FORWARD';
+  message: string;
+}
+
+/**
+ * Dry-run analysis of converting a board between 'flow' and 'flat'.
+ */
+export interface BoardConversionAnalysis {
+  boardId: string;
+  currentType: BoardType;
+  targetType: BoardType;
+  canConvertCleanly: boolean;
+  symmetricEdgeIds: string[];
+  customRelationEdgeIds: string[];
+  cycleEdgeIds: string[];
+}
+
+/**
  * Result returned by BoardGraphService.computeTimelineLayout.
  */
 export interface TimelineSortResult {
   boardId: string;
   steps: TimelineStepGroup[];
   violations: TimelineViolation[];
+  jumpBackEdges: Edge[];
+  warnings: JumpBackWarning[];
+  hasTemporalCycle: boolean;
 }

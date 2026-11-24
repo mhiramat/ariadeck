@@ -3,6 +3,7 @@ import type {
   AssetSyncStatus,
   AttachmentKind,
   Board,
+  BoardType,
   Card,
   CardAttachment,
   CardStatus,
@@ -10,18 +11,21 @@ import type {
   ConflictRecord,
   ConflictType,
   Edge,
+  EdgeDirection,
+  EdgeStyleVariant,
   RelationType,
   SyncOutboxEntityType,
   SyncOutboxEntry,
   SyncOutboxOperation,
 } from '../types/models.js';
-import { SCHEMA_DDL_STATEMENTS } from './schema.js';
+import { SCHEMA_DDL_STATEMENTS, SCHEMA_V2_INDEX_STATEMENTS } from './schema.js';
 import type { NewSyncOutboxEntry, StorageAdapter } from './StorageAdapter.js';
 
 interface BoardRow {
   id: string;
   title: string;
   description: string;
+  board_type?: string;
   created_at: string;
   updated_at: string;
   updated_by_device_id: string;
@@ -58,7 +62,10 @@ interface EdgeRow {
   source_card_id: string;
   target_card_id: string;
   relation_type: string;
+  direction?: string;
   label: string | null;
+  style_variant?: string;
+  color?: string | null;
   is_conflicted: number;
   conflict_reason: string | null;
   created_at: string;
@@ -115,6 +122,7 @@ function mapBoardRow(row: BoardRow): Board {
     id: row.id,
     title: row.title,
     description: row.description,
+    boardType: (row.board_type === 'flat' ? 'flat' : 'flow') as BoardType,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     updatedByDeviceId: row.updated_by_device_id,
@@ -159,6 +167,9 @@ function mapEdgeRow(row: EdgeRow): Edge {
     sourceCardId: row.source_card_id,
     targetCardId: row.target_card_id,
     relationType: row.relation_type as RelationType,
+    direction: (row.direction ?? 'directed') as EdgeDirection,
+    styleVariant: (row.style_variant ?? 'solid') as EdgeStyleVariant,
+    color: row.color ?? null,
     isConflicted: row.is_conflicted === 1,
     conflictReason: row.conflict_reason,
     createdAt: row.created_at,
@@ -242,6 +253,78 @@ export class SqliteStorageAdapter implements StorageAdapter {
     return this.db;
   }
 
+  private migrateSchemaV1ToV2(db: Database.Database): void {
+    const boardCols = new Set(
+      (db.prepare('PRAGMA table_info(boards)').all() as Array<{ name: string }>).map(
+        (c) => c.name
+      )
+    );
+    if (!boardCols.has('board_type')) {
+      db.exec(
+        `ALTER TABLE boards ADD COLUMN board_type TEXT NOT NULL DEFAULT 'flow' CHECK (board_type IN ('flow', 'flat'))`
+      );
+    }
+
+    const edgeCols = new Set(
+      (db.prepare('PRAGMA table_info(edges)').all() as Array<{ name: string }>).map(
+        (c) => c.name
+      )
+    );
+    if (!edgeCols.has('direction') || !edgeCols.has('style_variant') || !edgeCols.has('color')) {
+      db.pragma('foreign_keys = OFF');
+      db.exec('BEGIN TRANSACTION');
+      try {
+        db.exec(`CREATE TABLE edges_v2 (
+          id TEXT PRIMARY KEY,
+          board_id TEXT NOT NULL,
+          source_card_id TEXT NOT NULL,
+          target_card_id TEXT NOT NULL,
+          relation_type TEXT NOT NULL DEFAULT 'blocks'
+            CHECK (relation_type IN ('blocks', 'causes', 'relates_to', 'jump_back', 'custom')),
+          direction TEXT NOT NULL DEFAULT 'directed'
+            CHECK (direction IN ('directed', 'bidirectional', 'undirected')),
+          label TEXT,
+          style_variant TEXT NOT NULL DEFAULT 'solid'
+            CHECK (style_variant IN ('solid', 'dashed', 'dotted')),
+          color TEXT,
+          is_conflicted INTEGER NOT NULL DEFAULT 0,
+          conflict_reason TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          updated_by_device_id TEXT NOT NULL,
+          version INTEGER NOT NULL DEFAULT 1,
+          deleted_at TEXT,
+          FOREIGN KEY (board_id) REFERENCES boards(id),
+          FOREIGN KEY (source_card_id) REFERENCES cards(id),
+          FOREIGN KEY (target_card_id) REFERENCES cards(id)
+        )`);
+        db.exec(`INSERT INTO edges_v2 (
+          id, board_id, source_card_id, target_card_id, relation_type,
+          direction, label, style_variant, color, is_conflicted, conflict_reason,
+          created_at, updated_at, updated_by_device_id, version, deleted_at
+        )
+        SELECT
+          id, board_id, source_card_id, target_card_id, relation_type,
+          'directed', label, 'solid', NULL, COALESCE(is_conflicted, 0), conflict_reason,
+          created_at, updated_at, updated_by_device_id, version, deleted_at
+        FROM edges`);
+        db.exec('DROP TABLE edges');
+        db.exec('ALTER TABLE edges_v2 RENAME TO edges');
+        db.exec('CREATE INDEX IF NOT EXISTS idx_edges_board_id ON edges(board_id)');
+        db.exec('COMMIT');
+      } catch (err) {
+        db.exec('ROLLBACK');
+        throw err;
+      } finally {
+        db.pragma('foreign_keys = ON');
+      }
+    }
+
+    for (const idxSql of SCHEMA_V2_INDEX_STATEMENTS) {
+      db.exec(idxSql);
+    }
+  }
+
   async initialize(): Promise<void> {
     if (this.db) {
       return;
@@ -252,6 +335,7 @@ export class SqliteStorageAdapter implements StorageAdapter {
     for (const ddl of SCHEMA_DDL_STATEMENTS) {
       db.exec(ddl);
     }
+    this.migrateSchemaV1ToV2(db);
     this.db = db;
   }
 
@@ -317,18 +401,22 @@ export class SqliteStorageAdapter implements StorageAdapter {
     const db = this.getDb();
     db.prepare(
       `INSERT INTO boards (
-        id, title, description, created_at, updated_at, updated_by_device_id, version, deleted_at
+        id, title, description, board_type, created_at, updated_at, updated_by_device_id, version, deleted_at
       ) VALUES (
-        @id, @title, @description, @createdAt, @updatedAt, @updatedByDeviceId, @version, @deletedAt
+        @id, @title, @description, @boardType, @createdAt, @updatedAt, @updatedByDeviceId, @version, @deletedAt
       )
       ON CONFLICT(id) DO UPDATE SET
         title = excluded.title,
         description = excluded.description,
+        board_type = excluded.board_type,
         updated_at = excluded.updated_at,
         updated_by_device_id = excluded.updated_by_device_id,
         version = excluded.version,
         deleted_at = excluded.deleted_at`
-    ).run(board);
+    ).run({
+      ...board,
+      boardType: board.boardType ?? 'flow',
+    });
   }
 
   async listCardsByBoard(boardId: string, includeDeleted = false): Promise<Card[]> {
@@ -412,11 +500,13 @@ export class SqliteStorageAdapter implements StorageAdapter {
     const db = this.getDb();
     db.prepare(
       `INSERT INTO edges (
-        id, board_id, source_card_id, target_card_id, relation_type, label,
+        id, board_id, source_card_id, target_card_id, relation_type, direction,
+        label, style_variant, color,
         is_conflicted, conflict_reason,
         created_at, updated_at, updated_by_device_id, version, deleted_at
       ) VALUES (
-        @id, @boardId, @sourceCardId, @targetCardId, @relationType, @label,
+        @id, @boardId, @sourceCardId, @targetCardId, @relationType, @direction,
+        @label, @styleVariant, @color,
         @isConflicted, @conflictReason,
         @createdAt, @updatedAt, @updatedByDeviceId, @version, @deletedAt
       )
@@ -425,7 +515,10 @@ export class SqliteStorageAdapter implements StorageAdapter {
         source_card_id = excluded.source_card_id,
         target_card_id = excluded.target_card_id,
         relation_type = excluded.relation_type,
+        direction = excluded.direction,
         label = excluded.label,
+        style_variant = excluded.style_variant,
+        color = excluded.color,
         is_conflicted = excluded.is_conflicted,
         conflict_reason = excluded.conflict_reason,
         updated_at = excluded.updated_at,
@@ -434,7 +527,10 @@ export class SqliteStorageAdapter implements StorageAdapter {
         deleted_at = excluded.deleted_at`
     ).run({
       ...edge,
+      direction: edge.direction ?? 'directed',
       label: edge.label ?? null,
+      styleVariant: edge.styleVariant ?? 'solid',
+      color: edge.color ?? null,
       isConflicted: edge.isConflicted ? 1 : 0,
       conflictReason: edge.conflictReason ?? null,
     });

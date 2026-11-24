@@ -1,5 +1,5 @@
 /**
- * Idempotent SQLite DDL statements matching DESIGN_SPEC.md.
+ * Idempotent SQLite DDL statements matching DESIGN_SPEC.md and DESIGN_PHASE2.md (schema v2).
  * All Phase 1-4 tables and columns are created upfront to guarantee
  * forward-compatible schema evolution across local and synced databases.
  */
@@ -8,6 +8,7 @@ export const SCHEMA_DDL_STATEMENTS: readonly string[] = [
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
+    board_type TEXT NOT NULL DEFAULT 'flow' CHECK (board_type IN ('flow', 'flat')),
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     updated_by_device_id TEXT NOT NULL,
@@ -42,8 +43,14 @@ export const SCHEMA_DDL_STATEMENTS: readonly string[] = [
     board_id TEXT NOT NULL,
     source_card_id TEXT NOT NULL,
     target_card_id TEXT NOT NULL,
-    relation_type TEXT NOT NULL DEFAULT 'blocks',
+    relation_type TEXT NOT NULL DEFAULT 'blocks'
+      CHECK (relation_type IN ('blocks', 'causes', 'relates_to', 'jump_back', 'custom')),
+    direction TEXT NOT NULL DEFAULT 'directed'
+      CHECK (direction IN ('directed', 'bidirectional', 'undirected')),
     label TEXT,
+    style_variant TEXT NOT NULL DEFAULT 'solid'
+      CHECK (style_variant IN ('solid', 'dashed', 'dotted')),
+    color TEXT,
     is_conflicted INTEGER NOT NULL DEFAULT 0,
     conflict_reason TEXT,
     created_at TEXT NOT NULL,
@@ -100,4 +107,16 @@ export const SCHEMA_DDL_STATEMENTS: readonly string[] = [
   `CREATE INDEX IF NOT EXISTS idx_edges_board_id ON edges(board_id)`,
   `CREATE INDEX IF NOT EXISTS idx_attachments_card_id ON card_attachments(card_id)`,
   `CREATE INDEX IF NOT EXISTS idx_sync_outbox_unsynced ON sync_outbox(board_id, synced_at)`,
+];
+
+/**
+ * Post-migration v2 edge indexes (created after v1 -> v2 column migration runs).
+ */
+export const SCHEMA_V2_INDEX_STATEMENTS: readonly string[] = [
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_edges_active_unique
+    ON edges (board_id, source_card_id, target_card_id, relation_type, direction)
+    WHERE deleted_at IS NULL`,
+  `CREATE INDEX IF NOT EXISTS idx_edges_board_active
+    ON edges (board_id)
+    WHERE deleted_at IS NULL`,
 ];

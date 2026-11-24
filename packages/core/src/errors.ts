@@ -1,3 +1,5 @@
+import type { BoardConversionAnalysis } from './types/models.js';
+
 /**
  * Base class for all domain errors thrown by @ariadeck/core.
  */
@@ -13,18 +15,23 @@ export class AriadeckError extends Error {
 }
 
 /**
- * Thrown when adding a directed edge would introduce a cycle in the board DAG.
+ * Thrown when adding a directed temporal edge would introduce a cycle in a flow board DAG.
  */
 export class CyclicDependencyError extends AriadeckError {
   public readonly sourceCardId: string;
   public readonly targetCardId: string;
 
-  constructor(sourceCardId: string, targetCardId: string, message?: string) {
+  constructor(
+    sourceCardId: string,
+    targetCardId: string,
+    message?: string,
+    code = 'CYCLIC_DEPENDENCY'
+  ) {
     const defaultMessage =
       sourceCardId === targetCardId
         ? `Cannot connect card "${sourceCardId}" to itself: self-loops are not allowed.`
         : `Cannot connect card "${sourceCardId}" to "${targetCardId}": creating this dependency would introduce a cycle in the board DAG.`;
-    super('CYCLIC_DEPENDENCY', message ?? defaultMessage);
+    super(code, message ?? defaultMessage);
     this.sourceCardId = sourceCardId;
     this.targetCardId = targetCardId;
   }
@@ -45,10 +52,28 @@ export class NotFoundError extends AriadeckError {
 }
 
 /**
- * Thrown when input arguments violate domain invariants (e.g., fewer than 2 cards for split/merge).
+ * Thrown when input arguments violate domain invariants (e.g., fewer than 2 cards for split/merge,
+ * invalid edge type/direction for board type, or unsupported operation on flat boards).
  */
 export class ValidationError extends AriadeckError {
-  constructor(message: string) {
-    super('VALIDATION_ERROR', message);
+  constructor(message: string, code = 'VALIDATION_ERROR') {
+    super(code, message);
+  }
+}
+
+/**
+ * Thrown when converting a flat board to a flow board fails under strategy='abort'
+ * because incompatible edges or temporal cycles exist.
+ */
+export class BoardConversionError extends AriadeckError {
+  public readonly analysis: BoardConversionAnalysis;
+
+  constructor(analysis: BoardConversionAnalysis, message?: string) {
+    super(
+      'ERR_BOARD_CONVERSION_REQUIRES_RESOLUTION',
+      message ??
+        `Board "${analysis.boardId}" cannot be converted cleanly from "${analysis.currentType}" to "${analysis.targetType}". Resolve incompatible edges or pass strategy="demote_incompatible".`
+    );
+    this.analysis = analysis;
   }
 }
