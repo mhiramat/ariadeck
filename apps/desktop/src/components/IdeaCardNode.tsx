@@ -92,7 +92,7 @@ export function IdeaCardNode({ data, selected }: NodeProps<IdeaCardFlowNode>) {
     >
       <Handle
         id="left"
-        type="target"
+        type="source"
         position={Position.Left}
         title="Dependency prerequisite (blocks / causes)"
         className="!h-3 !w-3 !border-2 !border-slate-900 !bg-indigo-400"
