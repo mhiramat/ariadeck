@@ -34,6 +34,7 @@ For detailed architecture and specifications, see the documents in `docs/`:
 - [MCP Server Specification](docs/DESIGN_MCP.md)
 - [Board JSON Import/Export Format Specification](docs/BOARD_JSON_FORMAT.md)
 - [Phase 1 Implementation Guide](docs/IMPLEMENTATION_GUIDE_PHASE1.md)
+- [Phase 2 Design Specification (Timeline, Jump-Back Loops & Flat Boards)](docs/DESIGN_PHASE2.md)
 
 ## Prerequisites
 
@@ -76,9 +77,10 @@ In the Desktop UI:
 - **Double-click** empty canvas space (or use the bottom quick toolbar) to create a new card.
 - **Drag** cards freely to arrange them; positions persist automatically to SQLite.
 - **Double-click** a card title for inline renaming, or **single-click** a card to open the non-modal right Inspector Panel.
-- **Drag** from a card's right handle to another card's left handle to add a dependency edge. Cyclic dependencies are automatically rejected with a toast notification.
+- **Drag** from a card's right handle to another card's left handle to add a dependency edge (or toggle **Loop** on Flow boards to create non-blocking `jump_back` return arcs; on **Flat** boards, pick `→` / `↔` / `—` edge directions and run **Auto-Arrange** force-directed layout).
+- Click any edge label pill to edit its `relationType`, `direction` (on Flat boards), `styleVariant` (`solid`/`dashed`/`dotted`), and custom `label` inline.
 - Use **Split Card** in the Inspector Panel to decompose a card into sequential or parallel child cards while preserving edges.
-- Switch to the **Timeline** tab in the header and click **Auto-Sort Timeline** to arrange cards horizontally by topological dependency depth. Drag cards across step columns (or use the arrow buttons) to adjust order manually; any dependency ordering violations are highlighted in real time.
+- Switch to the **Timeline** tab in the header (available on Flow boards) and click **Auto-Sort Timeline** to arrange cards horizontally by topological dependency depth. Drag cards across step columns (or use the arrow buttons) to adjust order manually; dependency ordering violations and `jump_back` return arcs (with **Show Loops** toggle and hover focus) are rendered in real time.
 - Click the **Ariadeck** logo in the top-left corner to open the main menu (**Boards**, **New Board**, **Export MD**, **Export JSON**, and **Import JSON**).
 - Use **Export MD** to download a human-readable timeline-ordered Markdown document (`ariadeck-{board_slug}.md`), or **Export JSON** / **Import JSON** for lossless schema-validated backups and board templates (`ariadeck-{board_slug}.json`; see [BOARD_JSON_FORMAT.md](docs/BOARD_JSON_FORMAT.md)).
 - Use the **Sync** / **Conflict** badge in the header to synchronize with Google Drive (`Ariadeck/`) and review or resolve any offline sync conflicts in the Conflict Resolver modal.
@@ -158,11 +160,11 @@ Configure an MCP-compatible AI client (such as Antigravity or Claude Desktop) fr
   - `ariadeck://board/{board_id}/graph`
   - `ariadeck://board/{board_id}/summary`
 - **Tools**:
-  - `create_board`, `update_board`
+  - `create_board`, `update_board`, `convert_board_type`
   - `create_card`, `update_card`, `delete_card`
-  - `connect_cards`, `disconnect_cards`
+  - `connect_cards`, `update_edge`, `disconnect_cards`
   - `split_card`, `merge_cards`, `insert_intermediate_card`
-  - `compute_timeline_layout`, `export_board_markdown`, `export_board_json`, `import_board_json`
+  - `compute_timeline_layout`, `compute_timeline`, `export_board_markdown`, `export_board_json`, `import_board_json`
 - **Prompts**:
   - `analyze_and_split_complex_cards`
   - `find_and_merge_duplicates`
