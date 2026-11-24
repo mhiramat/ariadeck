@@ -11,6 +11,8 @@ const NAV_ITEMS: Array<{ mode: MobileViewMode; label: string; icon: typeof List 
 export function BottomNavBar() {
   const activeMode = useMobileStore((s) => s.activeMode);
   const setActiveMode = useMobileStore((s) => s.setActiveMode);
+  const graph = useMobileStore((s) => s.graph);
+  const isFlatBoard = (graph?.board.boardType ?? 'flow') === 'flat';
 
   return (
     <nav
@@ -19,13 +21,18 @@ export function BottomNavBar() {
     >
       {NAV_ITEMS.map(({ mode, label, icon: Icon }) => {
         const active = activeMode === mode;
+        const disabled = mode === 'timeline' && isFlatBoard;
         return (
           <button
             key={mode}
             type="button"
+            disabled={disabled}
+            title={disabled ? 'Timeline view is available for Flow boards' : label}
             aria-current={active ? 'page' : undefined}
-            onClick={() => setActiveMode(mode)}
-            className={`flex flex-col items-center justify-center gap-1 py-2.5 text-[11px] font-medium transition ${
+            onClick={() => {
+              if (!disabled) setActiveMode(mode);
+            }}
+            className={`flex flex-col items-center justify-center gap-1 py-2.5 text-[11px] font-medium transition disabled:cursor-not-allowed disabled:opacity-35 ${
               active ? 'text-indigo-400' : 'text-slate-400 hover:text-slate-200'
             }`}
           >

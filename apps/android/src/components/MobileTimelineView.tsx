@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
-import { AlertTriangle, ArrowDown, ArrowUp, Sparkles } from 'lucide-react';
-import { detectTimelineViolations, type Card } from '@ariadeck/core';
+import { AlertTriangle, ArrowDown, ArrowUp, RotateCcw, Sparkles } from 'lucide-react';
+import { detectTimelineViolations, type Card, type Edge } from '@ariadeck/core';
 import { useMobileStore } from '../store/useMobileStore.ts';
 
 export function MobileTimelineView() {
@@ -11,6 +11,19 @@ export function MobileTimelineView() {
 
   const cards = graph?.cards ?? [];
   const edges = graph?.edges ?? [];
+
+  const cardById = useMemo(() => new Map(cards.map((c) => [c.id, c])), [cards]);
+
+  const jumpBacksBySource = useMemo(() => {
+    const map = new Map<string, Edge[]>();
+    for (const edge of edges) {
+      if (edge.deletedAt !== null || edge.relationType !== 'jump_back') continue;
+      const list = map.get(edge.sourceCardId);
+      if (list) list.push(edge);
+      else map.set(edge.sourceCardId, [edge]);
+    }
+    return map;
+  }, [edges]);
 
   const violations = useMemo(
     () => detectTimelineViolations(cards, edges),
@@ -36,6 +49,11 @@ export function MobileTimelineView() {
     }
     return Array.from(byStep.entries()).sort(([a], [b]) => a - b);
   }, [cards]);
+
+  const scrollToCard = (targetCardId: string) => {
+    const el = document.getElementById(`mobile-timeline-card-${targetCardId}`);
+    el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  };
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden bg-slate-950">
@@ -88,47 +106,75 @@ export function MobileTimelineView() {
               {stepCards.map((card) => {
                 const hasViolation = violatedCardIds.has(card.id);
                 const currentStep = card.timelineOrder ?? 0;
+                const jumpBacks = jumpBacksBySource.get(card.id) ?? [];
+
                 return (
                   <div
                     key={card.id}
+                    id={`mobile-timeline-card-${card.id}`}
                     onClick={() => openCardEditor(card.id)}
-                    className={`flex items-center justify-between gap-2 rounded-xl border p-3 ${
+                    className={`rounded-xl border p-3 ${
                       hasViolation
                         ? 'border-rose-500 bg-rose-950/30'
                         : 'border-slate-800 bg-slate-900'
                     }`}
                   >
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-semibold text-white">{card.title}</p>
-                      <p className="text-[11px] text-slate-400">
-                        {card.cardType} · {card.status.replace('_', ' ')}
-                      </p>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-semibold text-white">{card.title}</p>
+                        <p className="text-[11px] text-slate-400">
+                          {card.cardType} · {card.status.replace('_', ' ')}
+                        </p>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1">
+                        <button
+                          type="button"
+                          disabled={currentStep === 0}
+                          aria-label={`Move ${card.title} earlier`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void moveCardToTimelineStep(card.id, Math.max(0, currentStep - 1));
+                          }}
+                          className="rounded-lg bg-slate-800 p-1.5 text-slate-300 disabled:opacity-30"
+                        >
+                          <ArrowUp className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          aria-label={`Move ${card.title} later`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void moveCardToTimelineStep(card.id, currentStep + 1);
+                          }}
+                          className="rounded-lg bg-slate-800 p-1.5 text-slate-300"
+                        >
+                          <ArrowDown className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
                     </div>
-                    <div className="flex shrink-0 items-center gap-1">
-                      <button
-                        type="button"
-                        disabled={currentStep === 0}
-                        aria-label={`Move ${card.title} earlier`}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          void moveCardToTimelineStep(card.id, Math.max(0, currentStep - 1));
-                        }}
-                        className="rounded-lg bg-slate-800 p-1.5 text-slate-300 disabled:opacity-30"
-                      >
-                        <ArrowUp className="h-3.5 w-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        aria-label={`Move ${card.title} later`}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          void moveCardToTimelineStep(card.id, currentStep + 1);
-                        }}
-                        className="rounded-lg bg-slate-800 p-1.5 text-slate-300"
-                      >
-                        <ArrowDown className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
+
+                    {jumpBacks.length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {jumpBacks.map((jb) => {
+                          const targetTitle = cardById.get(jb.targetCardId)?.title ?? jb.targetCardId;
+                          return (
+                            <button
+                              key={jb.id}
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                scrollToCard(jb.targetCardId);
+                              }}
+                              className="inline-flex items-center gap-1 rounded-full border border-amber-500/40 bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-200"
+                            >
+                              <RotateCcw className="h-2.5 w-2.5 text-amber-400" />
+                              Jumps back to: {targetTitle}
+                              {jb.label ? ` (${jb.label})` : ''}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                 );
               })}

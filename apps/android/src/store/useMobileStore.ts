@@ -1,12 +1,15 @@
 import { create } from 'zustand';
 import {
   BoardGraphService,
+  CyclicDependencyError,
   type Board,
   type BoardGraph,
+  type BoardType,
   type Card,
   type CardAttachment,
   type CardStatus,
   type CardType,
+  type ConnectCardsOptions,
   type RelationType,
   type StorageAdapter,
 } from '@ariadeck/core';
@@ -32,11 +35,13 @@ export interface MobileStoreState {
   filterType: CardType | 'all';
   relationToolMode: RelationToolMode;
   connectSourceId: string | null;
+  pendingFlatEdge: { sourceId: string; targetId: string } | null;
+  pendingJumpBack: { sourceId: string; targetId: string } | null;
   toasts: MobileToast[];
 
   initialize: () => Promise<void>;
   selectBoard: (boardId: string) => Promise<void>;
-  createBoard: (title: string) => Promise<void>;
+  createBoard: (title: string, boardType?: BoardType) => Promise<void>;
   renameBoard: (boardId: string, title: string) => Promise<void>;
 
   setActiveMode: (mode: MobileViewMode) => void;
@@ -48,6 +53,7 @@ export interface MobileStoreState {
 
   setRelationToolMode: (mode: RelationToolMode) => void;
   handleRelationCardTap: (cardId: string) => Promise<void>;
+  clearPendingEdgePrompts: () => void;
 
   createCard: (title: string, cardType?: CardType) => Promise<Card | null>;
   updateCard: (
@@ -70,7 +76,8 @@ export interface MobileStoreState {
   connectCards: (
     sourceId: string,
     targetId: string,
-    relationType?: RelationType
+    relationType?: RelationType,
+    options?: ConnectCardsOptions
   ) => Promise<void>;
   disconnectCards: (edgeId: string) => Promise<void>;
 
@@ -125,6 +132,8 @@ export function createMobileStore(
       filterType: 'all',
       relationToolMode: 'pan',
       connectSourceId: null,
+      pendingFlatEdge: null,
+      pendingJumpBack: null,
       toasts: [],
 
       pushToast: (kind, message) => {
@@ -156,15 +165,28 @@ export function createMobileStore(
       },
 
       selectBoard: async (boardId) => {
-        set({ selectedCardId: null, multiSelectIds: [], connectSourceId: null });
+        set({
+          selectedCardId: null,
+          multiSelectIds: [],
+          connectSourceId: null,
+          pendingFlatEdge: null,
+          pendingJumpBack: null,
+        });
         await refresh(boardId);
+        const nextGraph = get().graph;
+        if ((nextGraph?.board.boardType ?? 'flow') === 'flat' && get().activeMode === 'timeline') {
+          set({ activeMode: 'list' });
+        }
       },
 
-      createBoard: async (title) => {
+      createBoard: async (title, boardType = 'flow') => {
         try {
-          const board = await service.createBoard({ title });
+          const board = await service.createBoard({ title, boardType });
           await refresh(board.id);
-          get().pushToast('success', `Created "${board.title}".`);
+          if (boardType === 'flat' && get().activeMode === 'timeline') {
+            set({ activeMode: 'list' });
+          }
+          get().pushToast('success', `Created ${boardType} board "${board.title}".`);
         } catch (error) {
           get().pushToast('error', error instanceof Error ? error.message : 'Failed to create board.');
         }
@@ -200,10 +222,19 @@ export function createMobileStore(
 
       clearMultiSelect: () => set({ multiSelectIds: [] }),
 
-      setRelationToolMode: (mode) => set({ relationToolMode: mode, connectSourceId: null }),
+      setRelationToolMode: (mode) =>
+        set({
+          relationToolMode: mode,
+          connectSourceId: null,
+          pendingFlatEdge: null,
+          pendingJumpBack: null,
+        }),
+
+      clearPendingEdgePrompts: () =>
+        set({ pendingFlatEdge: null, pendingJumpBack: null }),
 
       handleRelationCardTap: async (cardId) => {
-        const { relationToolMode, connectSourceId } = get();
+        const { relationToolMode, connectSourceId, graph, activeBoardId } = get();
         if (relationToolMode === 'pan') {
           set({ selectedCardId: cardId });
           return;
@@ -217,7 +248,36 @@ export function createMobileStore(
           set({ connectSourceId: null });
           return;
         }
-        await get().connectCards(connectSourceId, cardId, 'blocks');
+
+        const boardType = graph?.board.boardType ?? 'flow';
+        if (boardType === 'flat') {
+          set({
+            pendingFlatEdge: { sourceId: connectSourceId, targetId: cardId },
+            connectSourceId: null,
+          });
+          return;
+        }
+
+        if (!activeBoardId) {
+          set({ connectSourceId: null });
+          return;
+        }
+        try {
+          await service.connectCards(activeBoardId, connectSourceId, cardId, 'blocks');
+          await refresh(activeBoardId);
+          get().pushToast('success', 'Connected dependency edge.');
+        } catch (error) {
+          if (error instanceof CyclicDependencyError) {
+            set({
+              pendingJumpBack: { sourceId: connectSourceId, targetId: cardId },
+            });
+          } else {
+            get().pushToast(
+              'error',
+              error instanceof Error ? error.message : 'Failed to connect cards.'
+            );
+          }
+        }
         set({ connectSourceId: null });
       },
 
@@ -288,13 +348,19 @@ export function createMobileStore(
         }
       },
 
-      connectCards: async (sourceId, targetId, relationType = 'blocks') => {
+      connectCards: async (sourceId, targetId, relationType = 'blocks', options) => {
         const boardId = get().activeBoardId;
         if (!boardId) return;
         try {
-          await service.connectCards(boardId, sourceId, targetId, relationType);
+          await service.connectCards(boardId, sourceId, targetId, relationType, options);
           await refresh(boardId);
-          get().pushToast('success', 'Connected dependency edge.');
+          set({ pendingFlatEdge: null, pendingJumpBack: null });
+          get().pushToast(
+            'success',
+            relationType === 'jump_back'
+              ? 'Created jump-back loop edge.'
+              : 'Connected relationship edge.'
+          );
         } catch (error) {
           get().pushToast('error', error instanceof Error ? error.message : 'Failed to connect cards.');
         }
