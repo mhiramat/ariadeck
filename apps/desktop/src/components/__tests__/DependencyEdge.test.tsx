@@ -3,12 +3,16 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { Position } from '@xyflow/react';
 
+let mockZoom = 1;
+
 vi.mock('@xyflow/react', async () => {
   const actual = await vi.importActual<typeof import('@xyflow/react')>('@xyflow/react');
   return {
     ...actual,
     BaseEdge: () => null,
     EdgeLabelRenderer: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+    useStore: (selector: (s: { transform: [number, number, number] }) => unknown) =>
+      selector({ transform: [0, 0, mockZoom] }),
   };
 });
 
@@ -58,5 +62,33 @@ describe('DependencyEdge inline label editing', () => {
       styleVariant: 'solid',
       label: 'triggers event',
     });
+  });
+
+  it('hides edge label pill when zoomed far out (zoom < 0.45)', () => {
+    mockZoom = 0.3;
+    const props: EdgeProps<DependencyFlowEdge> = {
+      id: 'edge-2',
+      source: 'c1',
+      target: 'c2',
+      sourceX: 0,
+      sourceY: 0,
+      targetX: 200,
+      targetY: 0,
+      sourcePosition: Position.Right,
+      targetPosition: Position.Left,
+      data: {
+        relationType: 'blocks',
+        onDelete: vi.fn(),
+      },
+    };
+
+    render(
+      <div>
+        <DependencyEdge {...props} />
+      </div>
+    );
+
+    expect(screen.queryByRole('button', { name: 'Edit edge blocks' })).not.toBeInTheDocument();
+    mockZoom = 1;
   });
 });

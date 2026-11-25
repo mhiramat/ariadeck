@@ -3,6 +3,7 @@ import {
   BaseEdge,
   EdgeLabelRenderer,
   getBezierPath,
+  useStore,
   type Edge,
   type EdgeProps,
 } from '@xyflow/react';
@@ -99,6 +100,8 @@ export function DependencyEdge({
   const [draftDirection, setDraftDirection] = useState<EdgeDirection>(currentDirection);
   const [draftStyle, setDraftStyle] = useState<EdgeStyleVariant>(currentStyle);
   const [draftLabel, setDraftLabel] = useState(currentLabel);
+  const zoom = useStore((s) => s.transform[2]);
+  const showLabel = editing || zoom >= 0.45;
 
   useEffect(() => {
     setDraftRelation(currentRelation);
@@ -174,17 +177,18 @@ export function DependencyEdge({
           strokeDasharray: getStrokeDasharray(currentStyle, currentRelation),
         }}
       />
-      <EdgeLabelRenderer>
-        <div
-          style={{
-            position: 'absolute',
-            transform: `translate(-50%, -50%) translate(${labelX}px,${labelY}px)`,
-            pointerEvents: 'all',
-          }}
-          className="nodrag nopan z-20"
-          onClick={(e) => e.stopPropagation()}
-          onDoubleClick={(e) => e.stopPropagation()}
-        >
+      {showLabel && (
+        <EdgeLabelRenderer>
+          <div
+            style={{
+              position: 'absolute',
+              transform: `translate(-50%, -50%) translate(${labelX}px,${labelY}px)`,
+              pointerEvents: 'all',
+            }}
+            className="nodrag nopan z-20"
+            onClick={(e) => e.stopPropagation()}
+            onDoubleClick={(e) => e.stopPropagation()}
+          >
           {editing ? (
             <form
               onSubmit={handleSubmit}
@@ -306,6 +310,7 @@ export function DependencyEdge({
           )}
         </div>
       </EdgeLabelRenderer>
+      )}
     </>
   );
 }

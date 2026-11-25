@@ -47,6 +47,7 @@ function GraphCanvasInner() {
   const selectCard = useBoardStore((s) => s.selectCard);
   const createCard = useBoardStore((s) => s.createCard);
   const updateCard = useBoardStore((s) => s.updateCard);
+  const updateCardPositions = useBoardStore((s) => s.updateCardPositions);
   const connectCards = useBoardStore((s) => s.connectCards);
   const updateEdge = useBoardStore((s) => s.updateEdge);
   const disconnectCards = useBoardStore((s) => s.disconnectCards);
@@ -292,12 +293,10 @@ function GraphCanvasInner() {
       })
     );
 
-    await Promise.all(
-      positions.map((p) => updateCard(p.cardId, { posX: p.posX, posY: p.posY }))
-    );
+    await updateCardPositions(positions);
 
     requestAnimationFrame(() => {
-      void fitView({ padding: 0.2, duration: 300 });
+      void fitView({ padding: 0.15, duration: 300 });
     });
     pushToast(
       'success',
@@ -305,7 +304,7 @@ function GraphCanvasInner() {
         ? 'Relationship map arranged with force-directed layout.'
         : 'Graph layout arranged by dependency order.'
     );
-  }, [graph, boardType, nodes, setNodes, updateCard, fitView, pushToast]);
+  }, [graph, boardType, nodes, setNodes, updateCardPositions, fitView, pushToast]);
 
   return (
     <div
@@ -324,8 +323,10 @@ function GraphCanvasInner() {
         onPaneClick={() => selectCard(null)}
         connectionMode={ConnectionMode.Loose}
         zoomOnDoubleClick={false}
+        minZoom={0.1}
+        maxZoom={2}
         fitView
-        fitViewOptions={{ padding: 0.25 }}
+        fitViewOptions={{ padding: 0.18 }}
         colorMode="dark"
       >
         <Background color="#334155" gap={24} />

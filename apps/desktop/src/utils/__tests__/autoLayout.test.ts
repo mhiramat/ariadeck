@@ -215,4 +215,50 @@ describe('computeAutoGraphLayout', () => {
       }
     }
   });
+
+  it('scales board spacing smoothly for 28-card Flow and Flat boards with zero card overlap', () => {
+    const cards = Array.from({ length: 28 }, (_, i) => makeCard(`big-${i + 1}`, `Node ${i + 1}`, i));
+    const flowEdges: Edge[] = [];
+    for (let i = 0; i < 27; i++) {
+      flowEdges.push(makeEdge(`fe-${i}`, `big-${Math.floor(i / 3) + 1}`, `big-${i + 2}`, 'blocks'));
+    }
+
+    const flowPos = computeAutoGraphLayout(cards, flowEdges);
+    expect(flowPos).toHaveLength(28);
+    for (let i = 0; i < flowPos.length; i++) {
+      for (let j = i + 1; j < flowPos.length; j++) {
+        const a = flowPos[i]!;
+        const b = flowPos[j]!;
+        const overlapX = a.posX < b.posX + 256 && b.posX < a.posX + 256;
+        const overlapY = a.posY < b.posY + 128 && b.posY < a.posY + 128;
+        expect(overlapX && overlapY).toBe(false);
+      }
+    }
+
+    const flatEdges: Edge[] = [];
+    for (let i = 0; i < 28; i++) {
+      flatEdges.push(makeEdge(`re-${i}`, `big-${i + 1}`, `big-${((i + 1) % 28) + 1}`, 'relates_to'));
+      if (i % 3 === 0) {
+        flatEdges.push(makeEdge(`re-c-${i}`, `big-${i + 1}`, `big-${((i + 7) % 28) + 1}`, 'custom'));
+      }
+    }
+
+    const flatPos = computeForceDirectedLayout(cards, flatEdges);
+    expect(flatPos).toHaveLength(28);
+    for (let i = 0; i < flatPos.length; i++) {
+      for (let j = i + 1; j < flatPos.length; j++) {
+        const a = flatPos[i]!;
+        const b = flatPos[j]!;
+        const overlapX = a.posX < b.posX + 256 && b.posX < a.posX + 256;
+        const overlapY = a.posY < b.posY + 128 && b.posY < a.posY + 128;
+        expect(overlapX && overlapY).toBe(false);
+      }
+    }
+
+    // Verify large flat board actually expands to a spacious canvas area
+    const xs = flatPos.map((p) => p.posX);
+    const ys = flatPos.map((p) => p.posY);
+    expect(Math.max(...xs) - Math.min(...xs)).toBeGreaterThan(1400);
+    expect(Math.max(...ys) - Math.min(...ys)).toBeGreaterThan(900);
+  });
 });

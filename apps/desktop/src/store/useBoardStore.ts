@@ -94,6 +94,9 @@ export interface BoardStoreState {
       endAt?: string | null;
     }
   ) => Promise<void>;
+  updateCardPositions: (
+    positions: Array<{ cardId: string; posX: number; posY: number }>
+  ) => Promise<void>;
   deleteCard: (cardId: string) => Promise<void>;
   connectCards: (
     sourceCardId: string,
@@ -472,6 +475,21 @@ export function createBoardStore(api: AriadeckApiClient = createAriadeckApiClien
         get().pushToast(
           'error',
           error instanceof Error ? error.message : 'Failed to update card.'
+        );
+      }
+    },
+
+    updateCardPositions: async (positions) => {
+      if (positions.length === 0) return;
+      try {
+        await Promise.all(
+          positions.map((p) => api.updateCard(p.cardId, { posX: p.posX, posY: p.posY }))
+        );
+        await get().refreshActiveBoard();
+      } catch (error) {
+        get().pushToast(
+          'error',
+          error instanceof Error ? error.message : 'Failed to save card positions.'
         );
       }
     },

@@ -405,9 +405,6 @@ export function computeAutoGraphLayout(
     dimsById.set(card.id, dims);
     if (dims.width > maxCardWidth) maxCardWidth = dims.width;
   }
-  const columnSpacing = maxCardWidth + COLUMN_GAP;
-
-  const stepMap = computeTopologicalSteps(activeCards, edges);
 
   const allActiveEdges = edges.filter(
     (e) =>
@@ -417,6 +414,19 @@ export function computeAutoGraphLayout(
       cardById.has(e.targetCardId) &&
       e.sourceCardId !== e.targetCardId
   );
+
+  // Dynamically scale board spacing and occlusion search budget as card/edge counts grow
+  const cardCount = activeCards.length;
+  const sizeScale =
+    cardCount <= 12 ? 1 : 1 + Math.min(1.2, Math.sqrt(cardCount - 12) * 0.16);
+  const edgeDensity = allActiveEdges.length / Math.max(1, cardCount);
+  const densityScale = 1 + Math.min(0.6, Math.max(0, edgeDensity - 1.2) * 0.25);
+  const effectiveColumnGap = Math.round(COLUMN_GAP * sizeScale * densityScale);
+  const effectiveMinVerticalGap = Math.round(MIN_VERTICAL_GAP * sizeScale);
+  const effectiveDummyLaneGap = Math.round(DUMMY_LANE_GAP * sizeScale);
+  const columnSpacing = maxCardWidth + effectiveColumnGap;
+
+  const stepMap = computeTopologicalSteps(activeCards, edges);
 
   // Only strong ordering edges (blocks / causes) govern horizontal left-to-right columns
   // and Sugiyama dummy corridor lanes. Weak relates_to edges attach via top/bottom handles
@@ -565,12 +575,12 @@ export function computeAutoGraphLayout(
       const prev = bucket[i - 1]!;
       const curr = bucket[i]!;
       const gap = !prev.isDummy && !curr.isDummy
-        ? prev.height + MIN_VERTICAL_GAP
+        ? prev.height + effectiveMinVerticalGap
         : prev.isDummy && curr.isDummy
-          ? DUMMY_LANE_GAP
+          ? effectiveDummyLaneGap
           : prev.isDummy
-            ? DUMMY_LANE_GAP
-            : prev.height + DUMMY_LANE_GAP / 2;
+            ? effectiveDummyLaneGap
+            : prev.height + effectiveDummyLaneGap / 2;
       offsets.push(offsets[i - 1]! + gap);
     }
     const lastNode = bucket[bucket.length - 1]!;
@@ -731,7 +741,7 @@ export function computeAutoGraphLayout(
         const curr = sorted[i]!;
         const below = sorted[i + 1]!;
         const currHeight = dimsById.get(curr.cardId)!.height;
-        const maxAllowedY = below.posY - currHeight - MIN_VERTICAL_GAP;
+        const maxAllowedY = below.posY - currHeight - effectiveMinVerticalGap;
         if (curr.posY > maxAllowedY) {
           curr.posY = Math.round(maxAllowedY);
         }
@@ -742,7 +752,7 @@ export function computeAutoGraphLayout(
         const prev = sorted[i - 1]!;
         const curr = sorted[i]!;
         const prevHeight = dimsById.get(prev.cardId)!.height;
-        const minAllowedY = prev.posY + prevHeight + MIN_VERTICAL_GAP;
+        const minAllowedY = prev.posY + prevHeight + effectiveMinVerticalGap;
         if (curr.posY < minAllowedY) {
           curr.posY = Math.round(minAllowedY);
         }
@@ -781,7 +791,11 @@ export function computeAutoGraphLayout(
       return best;
     };
 
-    for (let iter = 0; iter < 48; iter++) {
+    const maxOcclusionIters = Math.min(120, Math.max(48, Math.round(cardCount * 2.5)));
+    const scanMargin = Math.round(220 * sizeScale);
+    const scanStep = Math.round(60 * sizeScale);
+
+    for (let iter = 0; iter < maxOcclusionIters; iter++) {
       const { score: currentScore, events } = evaluateLayout(true);
       if (currentScore.totalOcclusions === 0) break;
 
@@ -848,11 +862,11 @@ export function computeAutoGraphLayout(
           if (p.posY < minY) minY = p.posY;
           if (p.posY + h > maxY) maxY = p.posY + h;
         }
-        const scanStart = Math.floor((minY - 220) / 60) * 60;
-        const scanEnd = Math.ceil((maxY + 220) / 60) * 60;
+        const scanStart = Math.floor((minY - scanMargin) / scanStep) * scanStep;
+        const scanEnd = Math.ceil((maxY + scanMargin) / scanStep) * scanStep;
 
         for (const cardId of involvedCards) {
-          for (let y = scanStart; y <= scanEnd; y += 60) {
+          for (let y = scanStart; y <= scanEnd; y += scanStep) {
             bestMove = tryCandidate(cardId, y, bestMove);
           }
         }
@@ -902,15 +916,20 @@ export function computeForceDirectedLayout(
     dimsById.set(card.id, estimateCardDimensions(card, nodeDimensions));
   }
 
-  // Deterministic circular initial placement to prevent symmetry deadlocks
+  // Scale force-directed canvas area, spring length, repulsion, and padding with card count
   const n = activeCards.length;
-  const radius = Math.max(240, n * 65);
+  const scale = n <= 10 ? 1 : 1 + Math.sqrt(n - 10) * 0.22;
+  const radius = Math.max(260, Math.sqrt(n) * 260);
+  const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+
+  // Deterministic initial placement: circle for small boards, golden-angle spiral for 16+ cards
   const state = activeCards.map((card, i) => {
-    const angle = (2 * Math.PI * i) / n;
+    const angle = n >= 16 ? i * goldenAngle : (2 * Math.PI * i) / n;
+    const r = n >= 16 ? radius * Math.sqrt((i + 0.5) / n) : radius;
     return {
       id: card.id,
-      x: Math.cos(angle) * radius,
-      y: Math.sin(angle) * radius,
+      x: Math.cos(angle) * r,
+      y: Math.sin(angle) * r,
       vx: 0,
       vy: 0,
       w: dimsById.get(card.id)!.width,
@@ -927,14 +946,41 @@ export function computeForceDirectedLayout(
       e.sourceCardId !== e.targetCardId
   );
 
-  const REPULSION = 180000;
-  const SPRING_LENGTH = 360;
+  const REPULSION = Math.round(180000 * scale * scale);
+  const SPRING_LENGTH = Math.round(360 * Math.min(2.2, 0.85 + scale * 0.35));
   const SPRING_K = 0.04;
-  const CENTER_GRAVITY = 0.012;
+  const CENTER_GRAVITY = 0.012 / (scale * scale);
   const DAMPING = 0.82;
-  const COLLISION_PAD = 36;
+  const COLLISION_PAD = Math.round(36 * Math.min(2.2, scale));
+  const iterations = Math.min(280, Math.max(160, 140 + n * 4));
 
-  for (let iter = 0; iter < 160; iter++) {
+  const resolveCollisions = () => {
+    for (let i = 0; i < state.length; i++) {
+      for (let j = i + 1; j < state.length; j++) {
+        const a = state[i]!;
+        const b = state[j]!;
+        const minDx = (a.w + b.w) / 2 + COLLISION_PAD;
+        const minDy = (a.h + b.h) / 2 + COLLISION_PAD;
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const overlapX = minDx - Math.abs(dx);
+        const overlapY = minDy - Math.abs(dy);
+        if (overlapX > 0 && overlapY > 0) {
+          if (overlapX < overlapY) {
+            const push = (overlapX / 2) * (dx >= 0 ? 1 : -1);
+            a.x -= push;
+            b.x += push;
+          } else {
+            const push = (overlapY / 2) * (dy >= 0 ? 1 : -1);
+            a.y -= push;
+            b.y += push;
+          }
+        }
+      }
+    }
+  };
+
+  for (let iter = 0; iter < iterations; iter++) {
     // 1. Pairwise Coulomb repulsion
     for (let i = 0; i < state.length; i++) {
       for (let j = i + 1; j < state.length; j++) {
@@ -979,29 +1025,12 @@ export function computeForceDirectedLayout(
     }
 
     // 4. Axis-aligned bounding-box collision pushout
-    for (let i = 0; i < state.length; i++) {
-      for (let j = i + 1; j < state.length; j++) {
-        const a = state[i]!;
-        const b = state[j]!;
-        const minDx = (a.w + b.w) / 2 + COLLISION_PAD;
-        const minDy = (a.h + b.h) / 2 + COLLISION_PAD;
-        const dx = b.x - a.x;
-        const dy = b.y - a.y;
-        const overlapX = minDx - Math.abs(dx);
-        const overlapY = minDy - Math.abs(dy);
-        if (overlapX > 0 && overlapY > 0) {
-          if (overlapX < overlapY) {
-            const push = (overlapX / 2) * (dx >= 0 ? 1 : -1);
-            a.x -= push;
-            b.x += push;
-          } else {
-            const push = (overlapY / 2) * (dy >= 0 ? 1 : -1);
-            a.y -= push;
-            b.y += push;
-          }
-        }
-      }
-    }
+    resolveCollisions();
+  }
+
+  // Final pure collision-resolution passes guarantee zero overlap on large graphs
+  for (let pass = 0; pass < 10; pass++) {
+    resolveCollisions();
   }
 
   // Normalize top-left origin to (START_X, BASELINE_Y)
