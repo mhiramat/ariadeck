@@ -170,6 +170,8 @@ function RelationMapInner() {
           }
           nodesDraggable={relationToolMode === 'pan'}
           nodesConnectable={false}
+          minZoom={0.1}
+          maxZoom={2}
           panOnDrag
           zoomOnPinch
           fitView
