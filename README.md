@@ -107,7 +107,7 @@ The `ariadeck-mcp` CLI supports two transport modes:
   ```
   This exposes:
   - REST API under `http://localhost:3456/api/*`
-  - Real-time SSE stream at `http://localhost:3456/api/events`
+  - Real-time SSE stream at `http://localhost:3456/api/events` (automatically broadcasts both in-process `/mcp` updates and cross-process stdio MCP commits to the shared SQLite database)
   - Streamable HTTP MCP endpoint at `http://localhost:3456/mcp`
 
 #### Environment Variables

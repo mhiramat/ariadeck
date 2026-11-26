@@ -18,7 +18,7 @@ This document specifies the Model Context Protocol (MCP) server (`packages/mcp-s
   * **Stdio Transport**: Standard child-process transport for local AI assistants and CLI MCP clients.
   * **Streamable HTTP / SSE Transport**: Allows `@ariadeck/desktop` and external MCP clients to share the same `ariadeck.db` instance concurrently and push real-time updates to the UI.
 * **Real-Time UI Synchronization**:
-  * Whenever an MCP tool mutates graph state, `BoardGraphService` emits an event that `@ariadeck/mcp-server` broadcasts over Server-Sent Events (`/api/events`), causing `@ariadeck/desktop` to update immediately without a page reload.
+  * Whenever an MCP tool mutates graph state (either in-process over `/mcp` or from a separate stdio MCP worker writing to the same SQLite database), `@ariadeck/mcp-server --http` broadcasts a coalesced `GraphEvent` over Server-Sent Events (`/api/events`), causing `@ariadeck/desktop` to update immediately without a page reload. Cross-process SQLite commits are detected cheaply via `PRAGMA data_version` and replayed from `sync_outbox` while SSE clients are connected.
 
 ### Client Configuration Example (Antigravity / Claude Desktop)
 
