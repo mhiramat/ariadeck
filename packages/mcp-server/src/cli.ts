@@ -7,15 +7,20 @@ import {
   BoardGraphService,
   BoardSyncEngine,
   GoogleDriveSyncAdapter,
+  MediaService,
+  resolveMaxImageBytes,
 } from '@ariadeck/core';
 import { SqliteStorageAdapter } from '@ariadeck/core/sqlite';
+import { NodeMediaStorageAdapter } from '@ariadeck/core/media-node';
 import { SessionAuthManager } from './auth.js';
 import { createHttpApp } from './httpServer.js';
 import { createAriadeckMcpServer, MCP_DEVICE_ID } from './mcpServer.js';
 import {
   ensurePrivateDirectory,
   loadOrCreateAuthTokenFile,
+  parseAllowedMediaDirs,
   resolveDbPath,
+  resolveMediaDir,
   resolveTokenFilePath,
   restrictSqliteFilePermissions,
 } from './userPaths.js';
@@ -52,11 +57,31 @@ async function main(): Promise<void> {
     ? (process.env.ARIADECK_HOST ?? '0.0.0.0')
     : '127.0.0.1';
 
+  const customMediaDir = Boolean(process.env.ARIADECK_MEDIA_DIR?.trim());
+  const mediaDir = resolveMediaDir();
+  if (customMediaDir) {
+    mkdirSync(mediaDir, { recursive: true });
+  } else {
+    ensurePrivateDirectory(mediaDir);
+  }
+
   const storage = new SqliteStorageAdapter(dbPath);
   await storage.initialize();
   restrictSqliteFilePermissions(dbPath);
 
   const service = new BoardGraphService(storage, { deviceId: MCP_DEVICE_ID });
+  const mediaStorage = new NodeMediaStorageAdapter(mediaDir);
+  const maxImageBytes = resolveMaxImageBytes(process.env.ARIADECK_MAX_IMAGE_BYTES);
+  const mediaService = new MediaService(storage, service, mediaStorage, {
+    deviceId: MCP_DEVICE_ID,
+    maxImageBytes,
+  });
+  const allowedMediaDirs = parseAllowedMediaDirs();
+
+  // Opportunistic reference-counted GC for long-expired soft-deleted blobs (30-day retention)
+  void mediaService.runMediaGarbageCollection(30).catch((err) => {
+    console.error('[ariadeck-mcp] Startup media GC warning:', err);
+  });
 
   if (httpMode) {
     const gdriveToken = process.env.ARIADECK_GDRIVE_ACCESS_TOKEN;
@@ -94,13 +119,17 @@ async function main(): Promise<void> {
 
     const app = createHttpApp(service, {
       syncEngine,
+      mediaService,
       authManager,
       allowedOrigins,
     });
 
     // Expose stateless Streamable HTTP MCP transport protected by the same auth middleware
     app.post('/mcp', authManager.middleware(), async (req, res) => {
-      const mcpServer = createAriadeckMcpServer(service);
+      const mcpServer = createAriadeckMcpServer(service, {
+        mediaService,
+        allowedMediaDirs,
+      });
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
       });
@@ -163,7 +192,10 @@ async function main(): Promise<void> {
     process.on('SIGINT', () => void shutdown());
     process.on('SIGTERM', () => void shutdown());
   } else {
-    const mcpServer = createAriadeckMcpServer(service);
+    const mcpServer = createAriadeckMcpServer(service, {
+      mediaService,
+      allowedMediaDirs,
+    });
     const transport = new StdioServerTransport();
     await mcpServer.connect(transport);
     console.error(`[ariadeck-mcp] Stdio MCP server running (db: ${dbPath})`);

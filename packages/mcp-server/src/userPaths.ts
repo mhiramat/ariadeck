@@ -1,6 +1,6 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { delimiter, dirname, join, resolve } from 'node:path';
 import { generateSecureAuthToken } from './auth.js';
 
 export interface LoadedAuthToken {
@@ -60,6 +60,33 @@ export function resolveTokenFilePath(
   const override = env.ARIADECK_AUTH_TOKEN_FILE?.trim();
   if (override) return override;
   return join(resolveDefaultConfigDir(env, homeDir), 'auth-token');
+}
+
+/**
+ * Resolves the Content-Addressed Storage (CAS) media root directory, defaulting
+ * to `${XDG_DATA_HOME:-~/.local/share}/ariadeck/media`.
+ */
+export function resolveMediaDir(
+  env: NodeJS.ProcessEnv = process.env,
+  homeDir = homedir()
+): string {
+  const override = env.ARIADECK_MEDIA_DIR?.trim();
+  if (override) return override;
+  return join(resolveDefaultDataDir(env, homeDir), 'media');
+}
+
+/**
+ * Parses ARIADECK_ALLOWED_MEDIA_DIRS (delimited by OS path.delimiter) into
+ * resolved directory paths. Returns an empty array when unset.
+ */
+export function parseAllowedMediaDirs(env: NodeJS.ProcessEnv = process.env): string[] {
+  const raw = env.ARIADECK_ALLOWED_MEDIA_DIRS?.trim();
+  if (!raw) return [];
+  return raw
+    .split(delimiter)
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry) => resolve(entry));
 }
 
 /**

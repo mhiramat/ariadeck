@@ -5,11 +5,19 @@ import {
   BoardGraphService,
   computeTopologicalSteps,
   type BoardGraph,
+  type CardAttachment,
+  type MediaService,
   type MutationContext,
 } from '@ariadeck/core';
 import { MCP_SERVER_NAME, MCP_SERVER_VERSION } from './httpServer.js';
+import { resolveImageSourceBytes } from './mediaSource.js';
 
 export const MCP_DEVICE_ID = 'ariadeck-mcp-server';
+
+export interface AriadeckMcpServerOptions {
+  mediaService?: MediaService;
+  allowedMediaDirs?: string[];
+}
 
 const MCP_MUTATION_CTX: MutationContext = {
   deviceId: MCP_DEVICE_ID,
@@ -17,11 +25,45 @@ const MCP_MUTATION_CTX: MutationContext = {
 
 const BoardTypeSchema = z.enum(['flow', 'flat']);
 const CardTypeSchema = z.enum(['task', 'idea', 'plot_event', 'note']);
+const CardDisplayModeSchema = z.enum(['standard', 'image_cover', 'image_only']);
 const CardStatusSchema = z.enum(['todo', 'in_progress', 'done', 'archived']);
 const RelationTypeSchema = z.enum(['blocks', 'causes', 'relates_to', 'jump_back', 'custom']);
 const EdgeDirectionSchema = z.enum(['directed', 'bidirectional', 'undirected']);
 const EdgeStyleVariantSchema = z.enum(['solid', 'dashed', 'dotted']);
 const SplitEdgeInheritanceSchema = z.enum(['sequential', 'broadcast', 'none']);
+const SupportedImageMimeTypeSchema = z.enum(['image/jpeg', 'image/png']);
+const ImageSourceSchema = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('file_path'),
+    path: z
+      .string()
+      .describe(
+        'Path to a local .jpg or .png file inside ARIADECK_ALLOWED_MEDIA_DIRS (disabled when unset)'
+      ),
+  }),
+  z.object({
+    type: z.literal('base64'),
+    data: z.string().describe('Raw Base64-encoded JPEG or PNG payload without a data URI prefix'),
+    mimeType: SupportedImageMimeTypeSchema.describe('Declared image MIME type'),
+  }),
+]);
+
+function summarizeAttachmentForMcp(att: CardAttachment) {
+  return {
+    id: att.id,
+    cardId: att.cardId,
+    kind: att.kind,
+    mimeType: att.mimeType,
+    fileSize: att.fileSize,
+    width: att.width ?? null,
+    height: att.height ?? null,
+    caption: att.caption ?? null,
+    transcript: att.transcript ?? null,
+    isCover: att.isCover ?? false,
+    sortOrder: att.sortOrder ?? 0,
+    syncStatus: att.syncStatus,
+  };
+}
 
 function formatBoardSummaryMarkdown(graph: BoardGraph): string {
   const cardById = new Map(graph.cards.map((c) => [c.id, c]));
@@ -111,11 +153,22 @@ function toolError(error: unknown) {
  * Creates and configures an Ariadeck MCP server instance exposing all
  * resources, tools, and prompts defined in DESIGN_MCP.md.
  */
-export function createAriadeckMcpServer(service: BoardGraphService): McpServer {
+export function createAriadeckMcpServer(
+  service: BoardGraphService,
+  options: AriadeckMcpServerOptions = {}
+): McpServer {
+  const { mediaService, allowedMediaDirs = [] } = options;
   const server = new McpServer({
     name: MCP_SERVER_NAME,
     version: MCP_SERVER_VERSION,
   });
+
+  const requireMediaService = (): MediaService => {
+    if (!mediaService) {
+      throw new Error('Media service is not configured on this Ariadeck MCP server.');
+    }
+    return mediaService;
+  };
 
   // ---------------------------------------------------------------------------
   // MCP Resources (Read-Only Context)
@@ -176,13 +229,24 @@ export function createAriadeckMcpServer(service: BoardGraphService): McpServer {
       const boardType = graph.board.boardType ?? 'flow';
       const ranks =
         boardType === 'flow' ? computeTopologicalSteps(graph.cards, graph.edges) : null;
+      const attachmentsByCard = new Map<string, ReturnType<typeof summarizeAttachmentForMcp>[]>();
+      const summarizedAttachments = graph.attachments.map((att) => {
+        const summary = summarizeAttachmentForMcp(att);
+        const list = attachmentsByCard.get(att.cardId);
+        if (list) list.push(summary);
+        else attachmentsByCard.set(att.cardId, [summary]);
+        return summary;
+      });
       const enriched = {
         ...graph,
         board: { ...graph.board, boardType },
         cards: graph.cards.map((c) => ({
           ...c,
+          displayMode: c.displayMode ?? 'standard',
+          attachments: attachmentsByCard.get(c.id) ?? [],
           ...(ranks ? { timelineRank: ranks.get(c.id) ?? 0 } : {}),
         })),
+        attachments: summarizedAttachments,
       };
       return {
         contents: [
@@ -329,7 +393,7 @@ export function createAriadeckMcpServer(service: BoardGraphService): McpServer {
     'update_card',
     {
       description:
-        'Update the title, Markdown content, status, or tags of an existing card on an Ariadeck board.',
+        'Update the title, Markdown content, status, tags, or visual displayMode of an existing card on an Ariadeck board.',
       inputSchema: {
         cardId: z.string().describe('ID of the card to update'),
         title: z.string().optional().describe('Updated card title'),
@@ -338,6 +402,9 @@ export function createAriadeckMcpServer(service: BoardGraphService): McpServer {
           'Updated status: todo, in_progress, done, or archived'
         ),
         tags: z.array(z.string()).optional().describe('Updated list of tags'),
+        displayMode: CardDisplayModeSchema.optional().describe(
+          'Visual card mode: standard, image_cover, or image_only'
+        ),
       },
     },
     async (args) => {
@@ -349,6 +416,7 @@ export function createAriadeckMcpServer(service: BoardGraphService): McpServer {
             content: args.content,
             status: args.status,
             tags: args.tags,
+            displayMode: args.displayMode,
           },
           MCP_MUTATION_CTX
         );
@@ -764,6 +832,192 @@ export function createAriadeckMcpServer(service: BoardGraphService): McpServer {
           MCP_MUTATION_CTX
         );
         return toolSuccess(graph);
+      } catch (error) {
+        return toolError(error);
+      }
+    }
+  );
+
+  // ---------------------------------------------------------------------------
+  // Image Attachment Tools (Phase 3)
+  // ---------------------------------------------------------------------------
+
+  server.registerTool(
+    'attach_image_to_card',
+    {
+      description:
+        'Attach a JPEG or PNG image to an existing Ariadeck card from a Base64 buffer or allowed local file path, automatically computing its SHA-256 content hash and generating a WebP canvas thumbnail.',
+      inputSchema: {
+        cardId: z.string().describe('ID of the target Ariadeck card'),
+        source: ImageSourceSchema.describe('Image payload source (base64 or allowed file_path)'),
+        caption: z.string().optional().describe('Optional searchable image caption'),
+        setAsCover: z
+          .boolean()
+          .optional()
+          .describe('Whether to set this image as the card cover (default: true)'),
+        displayMode: CardDisplayModeSchema.optional().describe(
+          'Optional card displayMode override (standard, image_cover, or image_only)'
+        ),
+      },
+    },
+    async (args) => {
+      try {
+        const media = requireMediaService();
+        const { bytes, expectedMimeType } = await resolveImageSourceBytes(args.source, {
+          allowedMediaDirs,
+          maxImageBytes: media.getMaxImageBytes(),
+        });
+        const result = await media.attachImageToCard(
+          {
+            cardId: args.cardId,
+            bytes,
+            expectedMimeType,
+            caption: args.caption,
+            setAsCover: args.setAsCover,
+            displayMode: args.displayMode,
+          },
+          MCP_MUTATION_CTX
+        );
+        return toolSuccess({
+          card: result.card,
+          attachment: summarizeAttachmentForMcp(result.attachment),
+        });
+      } catch (error) {
+        return toolError(error);
+      }
+    }
+  );
+
+  server.registerTool(
+    'create_image_card',
+    {
+      description:
+        'Create a new Ariadeck card and attach a JPEG or PNG image in a single atomic operation. Ideal for placing illustrations, portraits, or reference screenshots onto a board.',
+      inputSchema: {
+        boardId: z.string().describe('ID of the target Ariadeck board'),
+        title: z.string().describe('Title of the new image card'),
+        source: ImageSourceSchema.describe('Image payload source (base64 or allowed file_path)'),
+        content: z.string().optional().describe('Optional Markdown body content'),
+        caption: z.string().optional().describe('Optional searchable image caption'),
+        cardType: CardTypeSchema.optional().describe(
+          'Card type: task, idea, plot_event, or note (default: idea)'
+        ),
+        tags: z.array(z.string()).optional().describe('Optional list of tags'),
+        displayMode: CardDisplayModeSchema.optional().describe(
+          'Card displayMode: standard, image_cover (default), or image_only'
+        ),
+        posX: z.number().optional().describe('Optional canvas X coordinate'),
+        posY: z.number().optional().describe('Optional canvas Y coordinate'),
+      },
+    },
+    async (args) => {
+      try {
+        const media = requireMediaService();
+        const { bytes, expectedMimeType } = await resolveImageSourceBytes(args.source, {
+          allowedMediaDirs,
+          maxImageBytes: media.getMaxImageBytes(),
+        });
+        const result = await media.createImageCard(
+          {
+            boardId: args.boardId,
+            title: args.title,
+            bytes,
+            expectedMimeType,
+            content: args.content,
+            caption: args.caption,
+            cardType: args.cardType,
+            tags: args.tags,
+            displayMode: args.displayMode,
+            posX: args.posX,
+            posY: args.posY,
+          },
+          MCP_MUTATION_CTX
+        );
+        return toolSuccess({
+          card: result.card,
+          attachment: summarizeAttachmentForMcp(result.attachment),
+        });
+      } catch (error) {
+        return toolError(error);
+      }
+    }
+  );
+
+  server.registerTool(
+    'remove_card_attachment',
+    {
+      description:
+        'Soft-delete an attachment from an Ariadeck card, automatically promoting the next image to cover or resetting displayMode to standard if no images remain.',
+      inputSchema: {
+        attachmentId: z.string().describe('ID of the attachment to soft-delete'),
+      },
+    },
+    async (args) => {
+      try {
+        const media = requireMediaService();
+        await media.removeAttachment(args.attachmentId, MCP_MUTATION_CTX);
+        return toolSuccess({ deletedAttachmentId: args.attachmentId, status: 'deleted' });
+      } catch (error) {
+        return toolError(error);
+      }
+    }
+  );
+
+  server.registerTool(
+    'set_cover_image',
+    {
+      description:
+        'Mark a specific active image attachment as the cover image of an Ariadeck card.',
+      inputSchema: {
+        cardId: z.string().describe('ID of the card owning the image attachment'),
+        attachmentId: z.string().describe('ID of the image attachment to set as cover'),
+      },
+    },
+    async (args) => {
+      try {
+        const media = requireMediaService();
+        const attachment = await media.setCoverImage(
+          args.cardId,
+          args.attachmentId,
+          MCP_MUTATION_CTX
+        );
+        return toolSuccess({ attachment: summarizeAttachmentForMcp(attachment) });
+      } catch (error) {
+        return toolError(error);
+      }
+    }
+  );
+
+  server.registerTool(
+    'update_card_attachment',
+    {
+      description:
+        'Update editable metadata (such as caption or cover flag) on an existing Ariadeck card attachment.',
+      inputSchema: {
+        attachmentId: z.string().describe('ID of the attachment to update'),
+        caption: z
+          .string()
+          .nullable()
+          .optional()
+          .describe('Updated searchable image caption (pass null or empty string to clear)'),
+        isCover: z
+          .boolean()
+          .optional()
+          .describe('When true, sets this image attachment as the card cover'),
+      },
+    },
+    async (args) => {
+      try {
+        const media = requireMediaService();
+        const attachment = await media.updateAttachment(
+          args.attachmentId,
+          {
+            caption: args.caption,
+            isCover: args.isCover,
+          },
+          MCP_MUTATION_CTX
+        );
+        return toolSuccess({ attachment: summarizeAttachmentForMcp(attachment) });
       } catch (error) {
         return toolError(error);
       }

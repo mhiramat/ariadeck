@@ -39,6 +39,7 @@ Update properties of an existing card.
 - `content` (string, optional)
 - `status` (`"todo" | "in_progress" | "done" | "archived"`, optional)
 - `tags` (`string[]`, optional)
+- `displayMode` (`"standard" | "image_cover" | "image_only"`, optional)
 
 ### `delete_card`
 Soft-delete a card and cascade soft-deletion to its incident edges and attachments.
@@ -113,6 +114,42 @@ Analyze (`dryRun: true`) or convert a board between `flow` and `flat` modes (`st
 - `targetType` (`flow` | `flat`, required)
 - `dryRun` (boolean, optional)
 - `strategy` (`abort` | `demote_incompatible`, optional, default `abort`)
+
+### `attach_image_to_card`
+Attach a JPEG or PNG image to an existing card from a Base64 payload or an allowed local file path, automatically computing SHA-256 and generating a WebP thumbnail.
+- `cardId` (string, required)
+- `source` (`{ type: "base64", data, mimeType }` | `{ type: "file_path", path }`, required; `file_path` requires `ARIADECK_ALLOWED_MEDIA_DIRS`)
+- `caption` (string, optional)
+- `setAsCover` (boolean, optional, default `true`)
+- `displayMode` (`"standard" | "image_cover" | "image_only"`, optional)
+
+### `create_image_card`
+Atomically create a new card and attach a JPEG or PNG cover image in one operation.
+- `boardId` (string, required)
+- `title` (string, required)
+- `source` (`{ type: "base64", data, mimeType }` | `{ type: "file_path", path }`, required)
+- `content` (string, optional)
+- `caption` (string, optional)
+- `cardType` (`"task" | "idea" | "plot_event" | "note"`, optional)
+- `tags` (`string[]`, optional)
+- `displayMode` (`"standard" | "image_cover" | "image_only"`, optional, default `"image_cover"`)
+- `posX` (number, optional)
+- `posY` (number, optional)
+
+### `remove_card_attachment`
+Soft-delete an attachment from a card, auto-promoting the next cover image or resetting `displayMode` to `"standard"` when no images remain.
+- `attachmentId` (string, required)
+
+### `set_cover_image`
+Mark a specific active image attachment as the cover image of its card.
+- `cardId` (string, required)
+- `attachmentId` (string, required)
+
+### `update_card_attachment`
+Update editable metadata (caption or cover flag) on an existing attachment.
+- `attachmentId` (string, required)
+- `caption` (string | null, optional)
+- `isCover` (boolean, optional)
 
 ## Prompts
 

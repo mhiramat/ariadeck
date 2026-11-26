@@ -6,20 +6,27 @@ import {
   BoardGraphService,
   BoardSyncEngine,
   CyclicDependencyError,
+  DEFAULT_MAX_IMAGE_BYTES,
+  MediaService,
   NotFoundError,
   ValidationError,
   type BoardType,
+  type CardDisplayMode,
+  type CardType,
   type ConflictResolutionAction,
   type MutationContext,
+  type SupportedImageMimeType,
 } from '@ariadeck/core';
 import {
   parseCookies,
   SESSION_COOKIE_NAME,
   SessionAuthManager,
 } from './auth.js';
+import { resolveImageSourceBytes } from './mediaSource.js';
 
 export interface HttpAppOptions {
   syncEngine?: BoardSyncEngine;
+  mediaService?: MediaService;
   authToken?: string | null;
   authManager?: SessionAuthManager;
   allowedOrigins?: string[];
@@ -91,7 +98,13 @@ export function createHttpApp(
   service: BoardGraphService,
   options: HttpAppOptions = {}
 ): Express {
-  const { syncEngine } = options;
+  const { syncEngine, mediaService } = options;
+  const maxImageBytes = mediaService?.getMaxImageBytes() ?? DEFAULT_MAX_IMAGE_BYTES;
+  const jsonBodyLimit = Math.max(2 * 1024 * 1024, Math.ceil(maxImageBytes * 1.4) + 512 * 1024);
+  const rawImageParser = express.raw({
+    type: ['image/jpeg', 'image/png', 'application/octet-stream'],
+    limit: maxImageBytes,
+  });
   const auth =
     options.authManager ?? new SessionAuthManager(options.authToken ?? null);
   const extraOrigins = options.allowedOrigins ?? [];
@@ -109,7 +122,7 @@ export function createHttpApp(
       credentials: true,
     })
   );
-  app.use(express.json());
+  app.use(express.json({ limit: jsonBodyLimit }));
 
   app.get('/api/health', (_req, res) => {
     res.json({
@@ -407,6 +420,7 @@ export function createHttpApp(
           title: body.title,
           content: body.content,
           cardType: body.cardType,
+          displayMode: body.displayMode,
           status: body.status,
           tags: body.tags,
           posX: body.posX,
@@ -567,6 +581,264 @@ export function createHttpApp(
       res.status(204).send();
     })
   );
+
+  // Media & Image Attachments (Phase 3)
+  const requireMediaService = (res: Response): MediaService | null => {
+    if (!mediaService) {
+      res.status(501).json({
+        error: {
+          code: 'MEDIA_NOT_CONFIGURED',
+          message: 'Media storage is not configured on this server.',
+        },
+      });
+      return null;
+    }
+    return mediaService;
+  };
+
+  const queryString = (req: Request, key: string): string | undefined => {
+    const raw = req.query[key];
+    return typeof raw === 'string' ? raw : undefined;
+  };
+
+  const queryNumber = (req: Request, key: string): number | undefined => {
+    const raw = queryString(req, key);
+    if (raw === undefined || raw.trim() === '') return undefined;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  };
+
+  app.post(
+    '/api/cards/image',
+    rawImageParser,
+    asyncHandler(async (req, res) => {
+      const media = requireMediaService(res);
+      if (!media) return;
+
+      if (Buffer.isBuffer(req.body)) {
+        const boardId = queryString(req, 'boardId');
+        const title = queryString(req, 'title');
+        if (!boardId || !title) {
+          throw new ValidationError(
+            'Query parameters "boardId" and "title" are required for binary image card uploads.'
+          );
+        }
+        const bytes = new Uint8Array(req.body.buffer, req.body.byteOffset, req.body.byteLength);
+        const result = await media.createImageCard(
+          {
+            boardId,
+            title,
+            bytes,
+            content: queryString(req, 'content'),
+            caption: queryString(req, 'caption'),
+            cardType: queryString(req, 'cardType') as CardType | undefined,
+            displayMode: queryString(req, 'displayMode') as CardDisplayMode | undefined,
+            posX: queryNumber(req, 'posX'),
+            posY: queryNumber(req, 'posY'),
+          },
+          getMutationContext(req)
+        );
+        res.status(201).json(result);
+        return;
+      }
+
+      const body = req.body ?? {};
+      if (
+        typeof body.boardId !== 'string' ||
+        typeof body.title !== 'string' ||
+        typeof body.data !== 'string' ||
+        (body.mimeType !== 'image/jpeg' && body.mimeType !== 'image/png')
+      ) {
+        throw new ValidationError(
+          'Fields "boardId", "title", "data" (base64), and "mimeType" (image/jpeg | image/png) are required.'
+        );
+      }
+      const { bytes, expectedMimeType } = await resolveImageSourceBytes(
+        {
+          type: 'base64',
+          data: body.data,
+          mimeType: body.mimeType as SupportedImageMimeType,
+        },
+        { maxImageBytes: media.getMaxImageBytes() }
+      );
+      const result = await media.createImageCard(
+        {
+          boardId: body.boardId,
+          title: body.title,
+          bytes,
+          expectedMimeType,
+          content: body.content,
+          caption: body.caption,
+          cardType: body.cardType,
+          tags: body.tags,
+          displayMode: body.displayMode,
+          posX: body.posX,
+          posY: body.posY,
+        },
+        getMutationContext(req)
+      );
+      res.status(201).json(result);
+    })
+  );
+
+  app.post(
+    '/api/cards/:id/attachments/image',
+    rawImageParser,
+    asyncHandler(async (req, res) => {
+      const media = requireMediaService(res);
+      if (!media) return;
+      const cardId = paramId(req);
+
+      if (Buffer.isBuffer(req.body)) {
+        const bytes = new Uint8Array(req.body.buffer, req.body.byteOffset, req.body.byteLength);
+        const setAsCoverParam = queryString(req, 'setAsCover');
+        const setAsCover =
+          setAsCoverParam === undefined ? undefined : setAsCoverParam !== 'false';
+        const result = await media.attachImageToCard(
+          {
+            cardId,
+            bytes,
+            caption: queryString(req, 'caption'),
+            setAsCover,
+            displayMode: queryString(req, 'displayMode') as CardDisplayMode | undefined,
+          },
+          getMutationContext(req)
+        );
+        res.status(201).json(result);
+        return;
+      }
+
+      const body = req.body ?? {};
+      if (
+        typeof body.data !== 'string' ||
+        (body.mimeType !== 'image/jpeg' && body.mimeType !== 'image/png')
+      ) {
+        throw new ValidationError(
+          'Fields "data" (base64) and "mimeType" (image/jpeg | image/png) are required.'
+        );
+      }
+      const { bytes, expectedMimeType } = await resolveImageSourceBytes(
+        {
+          type: 'base64',
+          data: body.data,
+          mimeType: body.mimeType as SupportedImageMimeType,
+        },
+        { maxImageBytes: media.getMaxImageBytes() }
+      );
+      const result = await media.attachImageToCard(
+        {
+          cardId,
+          bytes,
+          expectedMimeType,
+          caption: body.caption,
+          setAsCover: typeof body.setAsCover === 'boolean' ? body.setAsCover : undefined,
+          displayMode: body.displayMode,
+        },
+        getMutationContext(req)
+      );
+      res.status(201).json(result);
+    })
+  );
+
+  app.patch(
+    '/api/attachments/:id',
+    asyncHandler(async (req, res) => {
+      const media = requireMediaService(res);
+      if (!media) return;
+      const body = req.body ?? {};
+      const attachment = await media.updateAttachment(
+        paramId(req),
+        {
+          ...(body.caption !== undefined ? { caption: body.caption } : {}),
+          ...(body.transcript !== undefined ? { transcript: body.transcript } : {}),
+          ...(body.isCover !== undefined ? { isCover: Boolean(body.isCover) } : {}),
+          ...(body.sortOrder !== undefined ? { sortOrder: Number(body.sortOrder) } : {}),
+        },
+        getMutationContext(req)
+      );
+      res.json({ attachment });
+    })
+  );
+
+  app.put(
+    '/api/cards/:id/attachments/reorder',
+    asyncHandler(async (req, res) => {
+      const media = requireMediaService(res);
+      if (!media) return;
+      const body = req.body ?? {};
+      if (!Array.isArray(body.attachmentIds)) {
+        throw new ValidationError('Field "attachmentIds" must be an array of attachment IDs.');
+      }
+      const attachments = await media.reorderCardAttachments(
+        paramId(req),
+        body.attachmentIds.map(String),
+        getMutationContext(req)
+      );
+      res.json({ attachments });
+    })
+  );
+
+  app.delete(
+    '/api/attachments/:id',
+    asyncHandler(async (req, res) => {
+      const media = requireMediaService(res);
+      if (!media) return;
+      await media.removeAttachment(paramId(req), getMutationContext(req));
+      res.status(204).send();
+    })
+  );
+
+  app.get(
+    '/api/media/attachments/:id/thumb',
+    asyncHandler(async (req, res) => {
+      const media = requireMediaService(res);
+      if (!media) return;
+      const { bytes, mimeType } = await media.readAttachmentThumbnail(paramId(req));
+      res.setHeader('Content-Type', mimeType);
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Cache-Control', 'private, max-age=31536000, immutable');
+      res.send(Buffer.from(bytes));
+    })
+  );
+
+  app.get(
+    '/api/media/attachments/:id/original',
+    asyncHandler(async (req, res) => {
+      const media = requireMediaService(res);
+      if (!media) return;
+      const { attachment, bytes } = await media.readAttachmentOriginal(paramId(req));
+      res.setHeader('Content-Type', attachment.mimeType);
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Cache-Control', 'private, max-age=31536000, immutable');
+      res.send(Buffer.from(bytes));
+    })
+  );
+
+  app.post(
+    '/api/media/gc',
+    asyncHandler(async (req, res) => {
+      const media = requireMediaService(res);
+      if (!media) return;
+      const retentionDays =
+        typeof req.body?.retentionDays === 'number' ? req.body.retentionDays : 30;
+      const result = await media.runMediaGarbageCollection(retentionDays);
+      res.json(result);
+    })
+  );
+
+  app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+    const maybeErr = err as { type?: string; status?: number; message?: string };
+    if (maybeErr?.type === 'entity.too.large') {
+      res.status(413).json({
+        error: {
+          code: 'ERR_IMAGE_TOO_LARGE',
+          message: `Request payload exceeds maximum allowed size (${maxImageBytes} bytes).`,
+        },
+      });
+      return;
+    }
+    sendDomainError(res, err);
+  });
 
   return app;
 }
