@@ -41,6 +41,7 @@ For detailed architecture and specifications, see the documents in `docs/`:
 - [Board JSON Import/Export Format Specification](docs/BOARD_JSON_FORMAT.md)
 - [Phase 1 Implementation Guide](docs/IMPLEMENTATION_GUIDE_PHASE1.md)
 - [Phase 2 Design Specification (Timeline, Jump-Back Loops & Flat Boards)](docs/DESIGN_PHASE2.md)
+- [Phase 3 Design Specification (JPEG/PNG Image Cards & Media Storage)](docs/DESIGN_PHASE3.md)
 
 ## Prerequisites
 
@@ -83,6 +84,7 @@ In the Desktop UI:
 - **Double-click** empty canvas space (or use the bottom quick toolbar) to create a new card.
 - **Drag** cards freely to arrange them; positions persist automatically to SQLite.
 - **Double-click** a card title for inline renaming, or **single-click** a card to open the non-modal right Inspector Panel.
+- **Attach JPEG/PNG images** by dragging files onto empty canvas space (creates new `image_cover` cards), dragging directly onto an existing card, pasting with `Ctrl/Cmd + V`, or using the **Images** gallery in the Inspector Panel. Switch between `standard`, `image_cover`, and `image_only` display modes, reorder or edit captions, and **double-click** a card image (or click the hover zoom button) to open the full-resolution Lightbox.
 - **Drag** from a card's right handle to another card's left handle to add a dependency edge (or toggle **Loop** on Flow boards to create non-blocking `jump_back` return arcs; on **Flat** boards, pick `→` / `↔` / `—` edge directions and run **Auto-Arrange** force-directed layout).
 - Click any edge label pill to edit its `relationType`, `direction` (on Flat boards), `styleVariant` (`solid`/`dashed`/`dotted`), and custom `label` inline.
 - Use **Split Card** in the Inspector Panel to decompose a card into sequential or parallel child cards while preserving edges.
@@ -113,6 +115,9 @@ The `ariadeck-mcp` CLI supports two transport modes:
 | Variable | Default | Description |
 | :--- | :--- | :--- |
 | `ARIADECK_DB_PATH` | `${XDG_DATA_HOME:-~/.local/share}/ariadeck/ariadeck.db` | Path to the local SQLite database file (parent dir `0700`, DB/WAL/SHM files `0600` on POSIX). |
+| `ARIADECK_MEDIA_DIR` | `${XDG_DATA_HOME:-~/.local/share}/ariadeck/media` | Content-Addressed Storage (CAS) root for original JPEG/PNG files and `sharp`-generated WebP thumbnails (`0700`/`0600` on POSIX). |
+| `ARIADECK_MAX_IMAGE_BYTES` | `15728640` (15 MiB) | Maximum allowed byte size for uploaded or MCP-attached JPEG/PNG images. |
+| `ARIADECK_ALLOWED_MEDIA_DIRS` | _(unset — `file_path` disabled)_ | OS path-delimited (`:` on POSIX, `;` on Windows) directories allowed for MCP `source.type === "file_path"` image reads. Strict opt-in: when unset, only `base64` input is accepted. |
 | `ARIADECK_PORT` | `3456` | Port for the HTTP / SSE / Streamable HTTP MCP server. |
 | `ARIADECK_HTTP` | `false` | Set to `true` to start in HTTP mode without passing `--http`. |
 | `ARIADECK_ALLOW_REMOTE` | `false` | Set to `true` (or pass `--allow-remote`) to bind beyond `127.0.0.1` for LAN/remote access. |
@@ -168,6 +173,7 @@ Configure an MCP-compatible AI client (such as Antigravity or Claude Desktop) fr
 - **Tools**:
   - `create_board`, `update_board`, `convert_board_type`
   - `create_card`, `update_card`, `delete_card`
+  - `attach_image_to_card`, `create_image_card`, `set_cover_image`, `update_card_attachment`, `remove_card_attachment`
   - `connect_cards`, `update_edge`, `disconnect_cards`
   - `split_card`, `merge_cards`, `insert_intermediate_card`
   - `compute_timeline_layout`, `compute_timeline`, `export_board_markdown`, `export_board_json`, `import_board_json`

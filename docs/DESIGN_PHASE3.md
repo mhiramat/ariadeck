@@ -37,11 +37,12 @@ ALTER TABLE cards
   ADD COLUMN display_mode TEXT NOT NULL DEFAULT 'standard'
   CHECK (display_mode IN ('standard', 'image_cover', 'image_only'));
 
--- 2. Extend card_attachments table for image dimensions, hashing, thumbnails, and cover selection
+-- 2. Extend card_attachments table for image dimensions, hashing, thumbnails, captions, and cover selection
 ALTER TABLE card_attachments ADD COLUMN sha256 TEXT;
 ALTER TABLE card_attachments ADD COLUMN width INTEGER;
 ALTER TABLE card_attachments ADD COLUMN height INTEGER;
 ALTER TABLE card_attachments ADD COLUMN thumbnail_uri TEXT;
+ALTER TABLE card_attachments ADD COLUMN caption TEXT;
 ALTER TABLE card_attachments ADD COLUMN is_cover INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE card_attachments ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;
 
@@ -98,26 +99,26 @@ export type AttachmentSyncStatus =
 
 export interface CardAttachment {
   id: string;
-  card_id: string;
-  board_id: string;
+  cardId: string;
+  boardId: string;
   kind: 'image' | 'audio';
-  mime_type: string;
-  file_size: number;
-  sha256: string;
-  width: number | null;
-  height: number | null;
-  local_uri: string;
-  thumbnail_uri: string | null;
-  caption: string | null;
+  mimeType: string;
+  fileSize: number;
+  sha256?: string | null;
+  width?: number | null;
+  height?: number | null;
+  localUri: string;
+  thumbnailUri?: string | null;
+  caption?: string | null;
   transcript: string | null;
-  is_cover: boolean;
-  sort_order: number;
-  sync_status: AttachmentSyncStatus;
-  created_at: string;
-  updated_at: string;
-  updated_by_device_id: string;
+  isCover?: boolean;
+  sortOrder?: number;
+  syncStatus: AttachmentSyncStatus;
+  createdAt: string;
+  updatedAt: string;
+  updatedByDeviceId: string;
   version: number;
-  deleted_at: string | null;
+  deletedAt: string | null;
 }
 
 export interface MediaStorageAdapter {
@@ -131,27 +132,29 @@ export interface MediaStorageAdapter {
     sha256: string,
     maxEdgePx?: number
   ): Promise<{ thumbnailUri: string; width: number; height: number }>;
+  readThumbnail(thumbnailUri: string): Promise<Uint8Array | null>;
+  deleteThumbnail(thumbnailUri: string): Promise<void>;
   resolveRenderUrl(localUri: string): Promise<string>; // file://, blob:, or capacitor:// URL
 }
 ```
 
 ### 3.4 Core Media Service Operations
 
-Implemented in `packages/core/src/services/mediaService.ts`:
+Implemented in `packages/core/src/service/mediaService.ts`:
 
 1. `attachImageToCard(params)`:
    - Validates MIME type via magic bytes and enforces `ARIADECK_MAX_IMAGE_BYTES`.
    - Computes `sha256` digest.
    - Writes original only if not already present in CAS (`existsOriginal`).
    - Extracts natural `width` / `height` and generates local thumbnail.
-   - Inserts `card_attachments` row inside a transaction; if `setAsCover` is `true` (or if it is the card's first image), clears `is_cover` on sibling attachments and optionally updates `cards.display_mode` (e.g., to `'image_cover'`).
-   - Enqueues attachment metadata + blob upload task in `sync_outbox`.
+   - Inserts `card_attachments` row inside a transaction; if `setAsCover` is `true` (or if it is the card's first image), clears `is_cover` on sibling attachments. If it is the card's first image and `displayMode` is unspecified, automatically switches `cards.display_mode` from `'standard'` to `'image_cover'`.
+   - Enqueues attachment metadata + card update in `sync_outbox`.
 2. `createImageCard(params)`:
-   - Atomically creates a new card at `(pos_x, pos_y)` and calls `attachImageToCard` with `setAsCover = true` and default `display_mode = 'image_cover'`.
-3. `setCoverImage(cardId, attachmentId)`:
-   - Marks a specific image attachment as the card's cover image.
+   - Atomically creates a new card at `(posX, posY)` and attaches the validated image with `isCover = true` and default `displayMode = 'image_cover'`.
+3. `setCoverImage(cardId, attachmentId)` / `updateAttachment(attachmentId, patch)` / `reorderCardAttachments(cardId, orderedIds)`:
+   - Manages cover selection, searchable captions, and gallery ordering (`sortOrder`).
 4. `removeAttachment(attachmentId)`:
-   - Sets `deleted_at` (soft delete) and clears `display_mode` back to `'standard'` if no active image attachments remain.
+   - Sets `deleted_at` (soft delete). If the removed attachment was the cover image and other images remain, auto-promotes the first remaining image (`sortOrder` ascending) to cover; resets `display_mode` back to `'standard'` if no active image attachments remain.
 
 ---
 
@@ -223,33 +226,37 @@ To keep LLM context windows compact, the graph resource includes **metadata only
 {
   "id": "crd_hero",
   "title": "Elena (Protagonist)",
-  "display_mode": "image_only",
+  "displayMode": "image_only",
   "attachments": [
     {
       "id": "att_01",
+      "cardId": "crd_hero",
       "kind": "image",
-      "mime_type": "image/png",
+      "mimeType": "image/png",
+      "fileSize": 184320,
       "width": 1024,
       "height": 1024,
       "caption": "Character portrait in winter cloak",
-      "is_cover": true,
-      "sync_status": "synced"
+      "transcript": null,
+      "isCover": true,
+      "sortOrder": 0,
+      "syncStatus": "synced"
     }
   ]
 }
 ```
 
-### 6.2 New MCP Tools
+### 6.2 New MCP Tools (camelCase Parameters Matching Existing MCP Surface)
 
 #### 1. `attach_image_to_card`
-- **Description**: *"Attach a JPEG or PNG image to an existing Ariadeck card from a local file path or Base64 string, automatically computing its content hash and generating a canvas thumbnail."*
+- **Description**: *"Attach a JPEG or PNG image to an existing Ariadeck card from a Base64 buffer or allowed local file path, automatically computing its SHA-256 content hash and generating a WebP canvas thumbnail."*
 - **Input Schema**:
   ```json
   {
     "type": "object",
-    "required": ["card_id", "source"],
+    "required": ["cardId", "source"],
     "properties": {
-      "card_id": { "type": "string" },
+      "cardId": { "type": "string" },
       "source": {
         "oneOf": [
           {
@@ -257,39 +264,47 @@ To keep LLM context windows compact, the graph resource includes **metadata only
             "required": ["type", "path"],
             "properties": {
               "type": { "const": "file_path" },
-              "path": { "type": "string", "description": "Absolute or allowed workspace path to a .jpg or .png file." }
+              "path": { "type": "string", "description": "Path to a .jpg or .png file inside ARIADECK_ALLOWED_MEDIA_DIRS." }
             }
           },
           {
             "type": "object",
-            "required": ["type", "data", "mime_type"],
+            "required": ["type", "data", "mimeType"],
             "properties": {
               "type": { "const": "base64" },
               "data": { "type": "string", "description": "Raw Base64-encoded image payload without data URI prefix." },
-              "mime_type": { "enum": ["image/jpeg", "image/png"] }
+              "mimeType": { "enum": ["image/jpeg", "image/png"] }
             }
           }
         ]
       },
       "caption": { "type": "string" },
-      "set_as_cover": { "type": "boolean", "default": true },
-      "display_mode": { "enum": ["standard", "image_cover", "image_only"] }
+      "setAsCover": { "type": "boolean", "default": true },
+      "displayMode": { "enum": ["standard", "image_cover", "image_only"] }
     }
   }
   ```
-- **Security Note**: When `source.type === 'file_path'`, `ariadeck-mcp` MUST validate the resolved path against `ARIADECK_ALLOWED_MEDIA_DIRS` (if configured) and verify image magic bytes before reading into CAS.
+- **Security Note (Strict Opt-In)**: `source.type === 'file_path'` is **disabled by default** when `ARIADECK_ALLOWED_MEDIA_DIRS` is unset (clients must use `base64` instead). When configured, `ariadeck-mcp` resolves symlinks via `realpath`, verifies the file resides inside an allowed directory, enforces `ARIADECK_MAX_IMAGE_BYTES`, and validates image magic bytes before writing into CAS.
 
 #### 2. `create_image_card`
-- **Description**: *"Create a new Ariadeck card and attach a JPEG or PNG image in a single atomic operation. Ideal for placing AI-generated scene art or character illustrations directly onto a board."*
-- **Parameters**: `board_id`, `title`, `source` (same union as `attach_image_to_card`), `content?`, `caption?`, `card_type?`, `display_mode?` (default `'image_cover'`), `pos_x?`, `pos_y?`.
+- **Description**: *"Create a new Ariadeck card and attach a JPEG or PNG image in a single atomic operation. Ideal for placing illustrations, portraits, or reference screenshots onto a board."*
+- **Parameters**: `boardId`, `title`, `source` (same union as `attach_image_to_card`), `content?`, `caption?`, `cardType?`, `tags?`, `displayMode?` (default `'image_cover'`), `posX?`, `posY?`.
 
 #### 3. `remove_card_attachment`
-- **Description**: *"Soft-delete an image attachment from an Ariadeck card."*
-- **Parameters**: `attachment_id`.
+- **Description**: *"Soft-delete an attachment from an Ariadeck card, auto-promoting the next image to cover or resetting `displayMode` to `'standard'` if no images remain."*
+- **Parameters**: `attachmentId`.
 
-#### 4. `export_board_markdown`
+#### 4. `set_cover_image`
+- **Description**: *"Mark a specific active image attachment as the cover image of an Ariadeck card."*
+- **Parameters**: `cardId`, `attachmentId`.
+
+#### 5. `update_card_attachment`
+- **Description**: *"Update editable metadata (`caption` or `isCover`) on an existing Ariadeck card attachment."*
+- **Parameters**: `attachmentId`, `caption?`, `isCover?`.
+
+#### 6. `export_board_markdown`
 - **Description**: *"Export an Ariadeck board (flow or flat) into a single structured Markdown document, including Mermaid diagrams, jump-back anchor links, and relative image paths."*
-- **Parameters**: `board_id`, `include_mermaid?: boolean` (default `true`), `media_base_path?: string` (default `'./media'`).
+- **Parameters**: `boardId`, `includeMermaid?: boolean` (default `true`), `mediaBasePath?: string` (default `'./media'`).
 
 ---
 
