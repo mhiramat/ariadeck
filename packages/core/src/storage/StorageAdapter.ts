@@ -45,6 +45,7 @@ export interface StorageAdapter {
   saveEdge(edge: Edge): Promise<void>;
 
   // Attachments
+  listAllAttachments(includeDeleted?: boolean): Promise<CardAttachment[]>;
   listAttachmentsByBoard(boardId: string, includeDeleted?: boolean): Promise<CardAttachment[]>;
   listAttachmentsByCard(cardId: string, includeDeleted?: boolean): Promise<CardAttachment[]>;
   getAttachment(attachmentId: string, includeDeleted?: boolean): Promise<CardAttachment | null>;

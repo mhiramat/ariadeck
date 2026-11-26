@@ -1,5 +1,6 @@
 export type BoardType = 'flow' | 'flat';
 export type CardType = 'task' | 'idea' | 'plot_event' | 'note';
+export type CardDisplayMode = 'standard' | 'image_cover' | 'image_only';
 export type CardStatus = 'todo' | 'in_progress' | 'done' | 'archived';
 export type RelationType = 'blocks' | 'causes' | 'relates_to' | 'jump_back' | 'custom';
 export type EdgeRelationType = RelationType;
@@ -8,7 +9,13 @@ export type EdgeStyleVariant = 'solid' | 'dashed' | 'dotted';
 export type SplitEdgeInheritance = 'sequential' | 'broadcast' | 'none';
 export type BoardConversionStrategy = 'abort' | 'demote_incompatible';
 export type AttachmentKind = 'image' | 'audio';
-export type AssetSyncStatus = 'local_only' | 'uploading' | 'synced' | 'missing_remote';
+export type SupportedImageMimeType = 'image/jpeg' | 'image/png';
+export type AssetSyncStatus =
+  | 'local_only'
+  | 'uploading'
+  | 'synced'
+  | 'downloading'
+  | 'missing_remote';
 
 export type SyncOutboxEntityType = 'board' | 'card' | 'edge' | 'attachment';
 export type SyncOutboxOperation = 'create' | 'update' | 'delete' | 'split' | 'merge';
@@ -45,6 +52,7 @@ export interface Card extends SyncMetadata {
   title: string;
   content: string;
   cardType: CardType;
+  displayMode?: CardDisplayMode;
   status: CardStatus;
   tags: string[];
 
@@ -90,6 +98,13 @@ export interface CardAttachment extends SyncMetadata {
   remoteFileId: string | null;
   mimeType: string;
   fileSize: number;
+  sha256?: string | null;
+  width?: number | null;
+  height?: number | null;
+  thumbnailUri?: string | null;
+  caption?: string | null;
+  isCover?: boolean;
+  sortOrder?: number;
   durationMs: number | null;
   transcript: string | null;
   syncStatus: AssetSyncStatus;
@@ -166,6 +181,7 @@ export interface CreateCardInput {
   title: string;
   content?: string;
   cardType?: CardType;
+  displayMode?: CardDisplayMode;
   status?: CardStatus;
   tags?: string[];
   posX?: number;
@@ -179,6 +195,7 @@ export interface UpdateCardInput {
   title?: string;
   content?: string;
   cardType?: CardType;
+  displayMode?: CardDisplayMode;
   status?: CardStatus;
   tags?: string[];
   posX?: number;
@@ -205,9 +222,59 @@ export interface CreateAttachmentInput {
   remoteFileId?: string | null;
   mimeType: string;
   fileSize?: number;
+  sha256?: string | null;
+  width?: number | null;
+  height?: number | null;
+  thumbnailUri?: string | null;
+  caption?: string | null;
+  isCover?: boolean;
+  sortOrder?: number;
   durationMs?: number | null;
   transcript?: string | null;
   syncStatus?: AssetSyncStatus;
+}
+
+export interface AttachImageInput {
+  cardId: string;
+  bytes: Uint8Array;
+  expectedMimeType?: SupportedImageMimeType;
+  caption?: string | null;
+  setAsCover?: boolean;
+  displayMode?: CardDisplayMode;
+}
+
+export interface CreateImageCardInput {
+  boardId: string;
+  title: string;
+  bytes: Uint8Array;
+  expectedMimeType?: SupportedImageMimeType;
+  content?: string;
+  caption?: string | null;
+  cardType?: CardType;
+  status?: CardStatus;
+  tags?: string[];
+  displayMode?: CardDisplayMode;
+  posX?: number;
+  posY?: number;
+}
+
+export interface UpdateAttachmentInput {
+  caption?: string | null;
+  transcript?: string | null;
+  isCover?: boolean;
+  sortOrder?: number;
+}
+
+export interface ImageAttachmentResult {
+  card: Card;
+  attachment: CardAttachment;
+}
+
+export interface MediaGarbageCollectionResult {
+  retentionDays: number;
+  cutoffIso: string;
+  deletedHashes: string[];
+  deletedFilesCount: number;
 }
 
 export interface SplitSubCardInput {

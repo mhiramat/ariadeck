@@ -1,7 +1,6 @@
 /**
- * Idempotent SQLite DDL statements matching DESIGN_SPEC.md and DESIGN_PHASE2.md (schema v2).
- * All Phase 1-4 tables and columns are created upfront to guarantee
- * forward-compatible schema evolution across local and synced databases.
+ * Idempotent SQLite DDL statements matching DESIGN_SPEC.md, DESIGN_PHASE2.md,
+ * and DESIGN_PHASE3.md (schema v3).
  */
 export const SCHEMA_DDL_STATEMENTS: readonly string[] = [
   `CREATE TABLE IF NOT EXISTS boards (
@@ -21,6 +20,8 @@ export const SCHEMA_DDL_STATEMENTS: readonly string[] = [
     title TEXT NOT NULL,
     content TEXT NOT NULL DEFAULT '',
     card_type TEXT NOT NULL DEFAULT 'idea',
+    display_mode TEXT NOT NULL DEFAULT 'standard'
+      CHECK (display_mode IN ('standard', 'image_cover', 'image_only')),
     status TEXT NOT NULL DEFAULT 'todo',
     tags_json TEXT NOT NULL DEFAULT '[]',
     pos_x REAL NOT NULL DEFAULT 0,
@@ -71,6 +72,13 @@ export const SCHEMA_DDL_STATEMENTS: readonly string[] = [
     remote_file_id TEXT,
     mime_type TEXT NOT NULL,
     file_size INTEGER NOT NULL DEFAULT 0,
+    sha256 TEXT,
+    width INTEGER,
+    height INTEGER,
+    thumbnail_uri TEXT,
+    caption TEXT,
+    is_cover INTEGER NOT NULL DEFAULT 0,
+    sort_order INTEGER NOT NULL DEFAULT 0,
     duration_ms INTEGER,
     transcript TEXT,
     sync_status TEXT NOT NULL DEFAULT 'local_only',
@@ -119,4 +127,15 @@ export const SCHEMA_V2_INDEX_STATEMENTS: readonly string[] = [
   `CREATE INDEX IF NOT EXISTS idx_edges_board_active
     ON edges (board_id)
     WHERE deleted_at IS NULL`,
+];
+
+/**
+ * Post-migration v3 attachment indexes (created after v2 -> v3 column migration runs).
+ */
+export const SCHEMA_V3_INDEX_STATEMENTS: readonly string[] = [
+  `CREATE INDEX IF NOT EXISTS idx_card_attachments_card_active
+    ON card_attachments (card_id, sort_order)
+    WHERE deleted_at IS NULL`,
+  `CREATE INDEX IF NOT EXISTS idx_card_attachments_sha256
+    ON card_attachments (sha256)`,
 ];

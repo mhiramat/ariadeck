@@ -11,4 +11,7 @@ export * from './export/jsonExportImport.js';
 export * from './sync/RemoteSyncAdapter.js';
 export * from './sync/GoogleDriveSyncAdapter.js';
 export * from './sync/BoardSyncEngine.js';
+export * from './media/imageValidation.js';
+export * from './media/MediaStorageAdapter.js';
 export * from './service/BoardGraphService.js';
+export * from './service/mediaService.js';

@@ -115,17 +115,33 @@ export class InMemoryStorageAdapter implements StorageAdapter {
     this.edges.set(edge.id, clone(edge));
   }
 
+  async listAllAttachments(includeDeleted = false): Promise<CardAttachment[]> {
+    return Array.from(this.attachments.values())
+      .filter((a) => includeDeleted || a.deletedAt === null)
+      .sort(
+        (a, b) =>
+          (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.createdAt.localeCompare(b.createdAt)
+      )
+      .map(clone);
+  }
+
   async listAttachmentsByBoard(boardId: string, includeDeleted = false): Promise<CardAttachment[]> {
     return Array.from(this.attachments.values())
       .filter((a) => a.boardId === boardId && (includeDeleted || a.deletedAt === null))
-      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+      .sort(
+        (a, b) =>
+          (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.createdAt.localeCompare(b.createdAt)
+      )
       .map(clone);
   }
 
   async listAttachmentsByCard(cardId: string, includeDeleted = false): Promise<CardAttachment[]> {
     return Array.from(this.attachments.values())
       .filter((a) => a.cardId === cardId && (includeDeleted || a.deletedAt === null))
-      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+      .sort(
+        (a, b) =>
+          (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.createdAt.localeCompare(b.createdAt)
+      )
       .map(clone);
   }
 

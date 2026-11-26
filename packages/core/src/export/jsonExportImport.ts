@@ -4,6 +4,7 @@ import type {
   AttachmentKind,
   BoardGraph,
   BoardType,
+  CardDisplayMode,
   CardStatus,
   CardType,
   EdgeDirection,
@@ -16,6 +17,7 @@ export const BOARD_JSON_SCHEMA_VERSION = 1 as const;
 
 const VALID_BOARD_TYPES = new Set<BoardType>(['flow', 'flat']);
 const VALID_CARD_TYPES = new Set<CardType>(['task', 'idea', 'plot_event', 'note']);
+const VALID_CARD_DISPLAY_MODES = new Set<CardDisplayMode>(['standard', 'image_cover', 'image_only']);
 const VALID_CARD_STATUSES = new Set<CardStatus>(['todo', 'in_progress', 'done', 'archived']);
 const VALID_RELATION_TYPES = new Set<RelationType>([
   'blocks',
@@ -37,6 +39,7 @@ export interface BoardJsonCard {
   title: string;
   content: string;
   cardType: CardType;
+  displayMode?: CardDisplayMode;
   status: CardStatus;
   tags: string[];
   posX: number;
@@ -123,6 +126,7 @@ export function renderBoardGraphToJson(
       title: c.title,
       content: c.content,
       cardType: c.cardType,
+      ...(c.displayMode && c.displayMode !== 'standard' ? { displayMode: c.displayMode } : {}),
       status: c.status,
       tags: [...c.tags],
       posX: c.posX,
@@ -259,6 +263,12 @@ export function parseAndValidateBoardJson(input: string | unknown): BoardJsonExp
         return;
       }
 
+      const displayMode = (item.displayMode ?? 'standard') as CardDisplayMode;
+      if (!VALID_CARD_DISPLAY_MODES.has(displayMode)) {
+        errors.push(`${prefix}.displayMode: invalid value "${String(item.displayMode)}".`);
+        return;
+      }
+
       const status = (item.status ?? 'todo') as CardStatus;
       if (!VALID_CARD_STATUSES.has(status)) {
         errors.push(`${prefix}.status: invalid value "${String(item.status)}".`);
@@ -309,6 +319,7 @@ export function parseAndValidateBoardJson(input: string | unknown): BoardJsonExp
         title: item.title.trim(),
         content,
         cardType,
+        ...(displayMode !== 'standard' ? { displayMode } : {}),
         status,
         tags: [...tagsRaw],
         posX,

@@ -13,6 +13,10 @@
     "./sqlite": {
       "types": "./dist/storage/SqliteStorageAdapter.d.ts",
       "import": "./dist/storage/SqliteStorageAdapter.js"
+    },
+    "./media-node": {
+      "types": "./dist/media/NodeMediaStorageAdapter.d.ts",
+      "import": "./dist/media/NodeMediaStorageAdapter.js"
     }
   },
   "scripts": {
@@ -21,7 +25,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "better-sqlite3": "^11.7.0"
+    "better-sqlite3": "^11.7.0",
+    "sharp": "^0.35.5"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.12",

@@ -34,6 +34,7 @@ import type {
   BoardType,
   Card,
   CardAttachment,
+  CardDisplayMode,
   ConnectCardsOptions,
   CreateAttachmentInput,
   CreateBoardInput,
@@ -272,6 +273,7 @@ export class BoardGraphService {
       title,
       content: input.content ?? '',
       cardType: input.cardType ?? 'idea',
+      displayMode: input.displayMode ?? 'standard',
       status: input.status ?? 'todo',
       tags: input.tags ? [...input.tags] : [],
       posX,
@@ -312,6 +314,16 @@ export class BoardGraphService {
     if (!nextTitle) {
       throw new ValidationError('Card title must not be empty.');
     }
+    if (
+      patch.displayMode !== undefined &&
+      patch.displayMode !== 'standard' &&
+      patch.displayMode !== 'image_cover' &&
+      patch.displayMode !== 'image_only'
+    ) {
+      throw new ValidationError(
+        `Invalid displayMode "${String(patch.displayMode)}". Expected "standard", "image_cover", or "image_only".`
+      );
+    }
 
     const timestamp = this.now();
     const deviceId = this.resolveDeviceId(ctx);
@@ -320,6 +332,7 @@ export class BoardGraphService {
       title: nextTitle,
       content: patch.content ?? existing.content,
       cardType: patch.cardType ?? existing.cardType,
+      displayMode: (patch.displayMode ?? existing.displayMode ?? 'standard') as CardDisplayMode,
       status: patch.status ?? existing.status,
       tags: patch.tags !== undefined ? [...patch.tags] : existing.tags,
       posX: patch.posX ?? existing.posX,
@@ -1520,6 +1533,7 @@ export class BoardGraphService {
         title: src.title,
         content: src.content,
         cardType: src.cardType,
+        displayMode: src.displayMode ?? 'standard',
         status: src.status,
         tags: [...src.tags],
         posX: src.posX,
@@ -1649,6 +1663,13 @@ export class BoardGraphService {
       remoteFileId: input.remoteFileId ?? null,
       mimeType: input.mimeType,
       fileSize: input.fileSize ?? 0,
+      sha256: input.sha256 ?? null,
+      width: input.width ?? null,
+      height: input.height ?? null,
+      thumbnailUri: input.thumbnailUri ?? null,
+      caption: input.caption ?? null,
+      isCover: input.isCover ?? false,
+      sortOrder: input.sortOrder ?? 0,
       durationMs: input.durationMs ?? null,
       transcript: input.transcript ?? null,
       syncStatus: input.syncStatus ?? 'local_only',
@@ -1755,10 +1776,13 @@ export class BoardGraphService {
 
     const transcriptsByCard = new Map<string, string[]>();
     for (const att of graph.attachments) {
-      if (att.transcript) {
+      const texts: string[] = [];
+      if (att.transcript) texts.push(att.transcript);
+      if (att.caption) texts.push(att.caption);
+      if (texts.length > 0) {
         const list = transcriptsByCard.get(att.cardId);
-        if (list) list.push(att.transcript);
-        else transcriptsByCard.set(att.cardId, [att.transcript]);
+        if (list) list.push(...texts);
+        else transcriptsByCard.set(att.cardId, texts);
       }
     }
 

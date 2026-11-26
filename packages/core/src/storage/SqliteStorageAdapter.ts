@@ -6,6 +6,7 @@ import type {
   BoardType,
   Card,
   CardAttachment,
+  CardDisplayMode,
   CardStatus,
   CardType,
   ConflictRecord,
@@ -18,7 +19,11 @@ import type {
   SyncOutboxEntry,
   SyncOutboxOperation,
 } from '../types/models.js';
-import { SCHEMA_DDL_STATEMENTS, SCHEMA_V2_INDEX_STATEMENTS } from './schema.js';
+import {
+  SCHEMA_DDL_STATEMENTS,
+  SCHEMA_V2_INDEX_STATEMENTS,
+  SCHEMA_V3_INDEX_STATEMENTS,
+} from './schema.js';
 import type { NewSyncOutboxEntry, StorageAdapter } from './StorageAdapter.js';
 
 interface BoardRow {
@@ -39,6 +44,7 @@ interface CardRow {
   title: string;
   content: string;
   card_type: string;
+  display_mode?: string;
   status: string;
   tags_json: string;
   pos_x: number;
@@ -84,6 +90,13 @@ interface AttachmentRow {
   remote_file_id: string | null;
   mime_type: string;
   file_size: number;
+  sha256?: string | null;
+  width?: number | null;
+  height?: number | null;
+  thumbnail_uri?: string | null;
+  caption?: string | null;
+  is_cover?: number;
+  sort_order?: number;
   duration_ms: number | null;
   transcript: string | null;
   sync_status: string;
@@ -131,6 +144,13 @@ function mapBoardRow(row: BoardRow): Board {
   };
 }
 
+function normalizeDisplayMode(value?: string): CardDisplayMode {
+  if (value === 'image_cover' || value === 'image_only') {
+    return value;
+  }
+  return 'standard';
+}
+
 function mapCardRow(row: CardRow): Card {
   return {
     id: row.id,
@@ -138,6 +158,7 @@ function mapCardRow(row: CardRow): Card {
     title: row.title,
     content: row.content,
     cardType: row.card_type as CardType,
+    displayMode: normalizeDisplayMode(row.display_mode),
     status: row.status as CardStatus,
     tags: JSON.parse(row.tags_json) as string[],
     posX: row.pos_x,
@@ -194,6 +215,13 @@ function mapAttachmentRow(row: AttachmentRow): CardAttachment {
     remoteFileId: row.remote_file_id,
     mimeType: row.mime_type,
     fileSize: row.file_size,
+    sha256: row.sha256 ?? null,
+    width: row.width ?? null,
+    height: row.height ?? null,
+    thumbnailUri: row.thumbnail_uri ?? null,
+    caption: row.caption ?? null,
+    isCover: row.is_cover === 1,
+    sortOrder: row.sort_order ?? 0,
     durationMs: row.duration_ms,
     transcript: row.transcript,
     syncStatus: row.sync_status as AssetSyncStatus,
@@ -325,6 +353,43 @@ export class SqliteStorageAdapter implements StorageAdapter {
     }
   }
 
+  private migrateSchemaV2ToV3(db: Database.Database): void {
+    const cardCols = new Set(
+      (db.prepare('PRAGMA table_info(cards)').all() as Array<{ name: string }>).map(
+        (c) => c.name
+      )
+    );
+    if (!cardCols.has('display_mode')) {
+      db.exec(
+        `ALTER TABLE cards ADD COLUMN display_mode TEXT NOT NULL DEFAULT 'standard' CHECK (display_mode IN ('standard', 'image_cover', 'image_only'))`
+      );
+    }
+
+    const attCols = new Set(
+      (db.prepare('PRAGMA table_info(card_attachments)').all() as Array<{ name: string }>).map(
+        (c) => c.name
+      )
+    );
+    const alterStatements: Array<[string, string]> = [
+      ['sha256', 'ALTER TABLE card_attachments ADD COLUMN sha256 TEXT'],
+      ['width', 'ALTER TABLE card_attachments ADD COLUMN width INTEGER'],
+      ['height', 'ALTER TABLE card_attachments ADD COLUMN height INTEGER'],
+      ['thumbnail_uri', 'ALTER TABLE card_attachments ADD COLUMN thumbnail_uri TEXT'],
+      ['caption', 'ALTER TABLE card_attachments ADD COLUMN caption TEXT'],
+      ['is_cover', 'ALTER TABLE card_attachments ADD COLUMN is_cover INTEGER NOT NULL DEFAULT 0'],
+      ['sort_order', 'ALTER TABLE card_attachments ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0'],
+    ];
+    for (const [col, sql] of alterStatements) {
+      if (!attCols.has(col)) {
+        db.exec(sql);
+      }
+    }
+
+    for (const idxSql of SCHEMA_V3_INDEX_STATEMENTS) {
+      db.exec(idxSql);
+    }
+  }
+
   async initialize(): Promise<void> {
     if (this.db) {
       return;
@@ -336,6 +401,7 @@ export class SqliteStorageAdapter implements StorageAdapter {
       db.exec(ddl);
     }
     this.migrateSchemaV1ToV2(db);
+    this.migrateSchemaV2ToV3(db);
     this.db = db;
   }
 
@@ -441,12 +507,12 @@ export class SqliteStorageAdapter implements StorageAdapter {
     const db = this.getDb();
     db.prepare(
       `INSERT INTO cards (
-        id, board_id, title, content, card_type, status, tags_json,
+        id, board_id, title, content, card_type, display_mode, status, tags_json,
         pos_x, pos_y, timeline_order, start_at, end_at,
         split_from_card_id, merged_from_card_ids_json, replaced_by_card_ids_json,
         created_at, updated_at, updated_by_device_id, version, deleted_at
       ) VALUES (
-        @id, @boardId, @title, @content, @cardType, @status, @tagsJson,
+        @id, @boardId, @title, @content, @cardType, @displayMode, @status, @tagsJson,
         @posX, @posY, @timelineOrder, @startAt, @endAt,
         @splitFromCardId, @mergedFromCardIdsJson, @replacedByCardIdsJson,
         @createdAt, @updatedAt, @updatedByDeviceId, @version, @deletedAt
@@ -456,6 +522,7 @@ export class SqliteStorageAdapter implements StorageAdapter {
         title = excluded.title,
         content = excluded.content,
         card_type = excluded.card_type,
+        display_mode = excluded.display_mode,
         status = excluded.status,
         tags_json = excluded.tags_json,
         pos_x = excluded.pos_x,
@@ -472,6 +539,7 @@ export class SqliteStorageAdapter implements StorageAdapter {
         deleted_at = excluded.deleted_at`
     ).run({
       ...card,
+      displayMode: normalizeDisplayMode(card.displayMode),
       tagsJson: JSON.stringify(card.tags),
       mergedFromCardIdsJson: card.mergedFromCardIds ? JSON.stringify(card.mergedFromCardIds) : null,
       replacedByCardIdsJson: card.replacedByCardIds ? JSON.stringify(card.replacedByCardIds) : null,
@@ -536,11 +604,20 @@ export class SqliteStorageAdapter implements StorageAdapter {
     });
   }
 
+  async listAllAttachments(includeDeleted = false): Promise<CardAttachment[]> {
+    const db = this.getDb();
+    const sql = includeDeleted
+      ? 'SELECT * FROM card_attachments ORDER BY sort_order ASC, created_at ASC'
+      : 'SELECT * FROM card_attachments WHERE deleted_at IS NULL ORDER BY sort_order ASC, created_at ASC';
+    const rows = db.prepare(sql).all() as AttachmentRow[];
+    return rows.map(mapAttachmentRow);
+  }
+
   async listAttachmentsByBoard(boardId: string, includeDeleted = false): Promise<CardAttachment[]> {
     const db = this.getDb();
     const sql = includeDeleted
-      ? 'SELECT * FROM card_attachments WHERE board_id = ? ORDER BY created_at ASC'
-      : 'SELECT * FROM card_attachments WHERE board_id = ? AND deleted_at IS NULL ORDER BY created_at ASC';
+      ? 'SELECT * FROM card_attachments WHERE board_id = ? ORDER BY sort_order ASC, created_at ASC'
+      : 'SELECT * FROM card_attachments WHERE board_id = ? AND deleted_at IS NULL ORDER BY sort_order ASC, created_at ASC';
     const rows = db.prepare(sql).all(boardId) as AttachmentRow[];
     return rows.map(mapAttachmentRow);
   }
@@ -548,8 +625,8 @@ export class SqliteStorageAdapter implements StorageAdapter {
   async listAttachmentsByCard(cardId: string, includeDeleted = false): Promise<CardAttachment[]> {
     const db = this.getDb();
     const sql = includeDeleted
-      ? 'SELECT * FROM card_attachments WHERE card_id = ? ORDER BY created_at ASC'
-      : 'SELECT * FROM card_attachments WHERE card_id = ? AND deleted_at IS NULL ORDER BY created_at ASC';
+      ? 'SELECT * FROM card_attachments WHERE card_id = ? ORDER BY sort_order ASC, created_at ASC'
+      : 'SELECT * FROM card_attachments WHERE card_id = ? AND deleted_at IS NULL ORDER BY sort_order ASC, created_at ASC';
     const rows = db.prepare(sql).all(cardId) as AttachmentRow[];
     return rows.map(mapAttachmentRow);
   }
@@ -568,11 +645,13 @@ export class SqliteStorageAdapter implements StorageAdapter {
     db.prepare(
       `INSERT INTO card_attachments (
         id, card_id, board_id, kind, local_uri, remote_file_id, mime_type,
-        file_size, duration_ms, transcript, sync_status,
+        file_size, sha256, width, height, thumbnail_uri, caption, is_cover, sort_order,
+        duration_ms, transcript, sync_status,
         created_at, updated_at, updated_by_device_id, version, deleted_at
       ) VALUES (
         @id, @cardId, @boardId, @kind, @localUri, @remoteFileId, @mimeType,
-        @fileSize, @durationMs, @transcript, @syncStatus,
+        @fileSize, @sha256, @width, @height, @thumbnailUri, @caption, @isCover, @sortOrder,
+        @durationMs, @transcript, @syncStatus,
         @createdAt, @updatedAt, @updatedByDeviceId, @version, @deletedAt
       )
       ON CONFLICT(id) DO UPDATE SET
@@ -583,6 +662,13 @@ export class SqliteStorageAdapter implements StorageAdapter {
         remote_file_id = excluded.remote_file_id,
         mime_type = excluded.mime_type,
         file_size = excluded.file_size,
+        sha256 = excluded.sha256,
+        width = excluded.width,
+        height = excluded.height,
+        thumbnail_uri = excluded.thumbnail_uri,
+        caption = excluded.caption,
+        is_cover = excluded.is_cover,
+        sort_order = excluded.sort_order,
         duration_ms = excluded.duration_ms,
         transcript = excluded.transcript,
         sync_status = excluded.sync_status,
@@ -590,7 +676,16 @@ export class SqliteStorageAdapter implements StorageAdapter {
         updated_by_device_id = excluded.updated_by_device_id,
         version = excluded.version,
         deleted_at = excluded.deleted_at`
-    ).run(attachment);
+    ).run({
+      ...attachment,
+      sha256: attachment.sha256 ?? null,
+      width: attachment.width ?? null,
+      height: attachment.height ?? null,
+      thumbnailUri: attachment.thumbnailUri ?? null,
+      caption: attachment.caption ?? null,
+      isCover: attachment.isCover ? 1 : 0,
+      sortOrder: attachment.sortOrder ?? 0,
+    });
   }
 
   async appendOutbox(entry: NewSyncOutboxEntry): Promise<SyncOutboxEntry> {
