@@ -58,6 +58,7 @@ export function AutoDismissToast({
 }
 
 export function DesktopAppShell() {
+  const authChecked = useBoardStore((s) => s.authChecked);
   const authRequired = useBoardStore((s) => s.authRequired);
   const authenticated = useBoardStore((s) => s.authenticated);
   const viewMode = useBoardStore((s) => s.viewMode);
@@ -74,14 +75,14 @@ export function DesktopAppShell() {
   }, [initialize]);
 
   useEffect(() => {
-    if (authRequired && !authenticated) {
+    if (!authChecked || (authRequired && !authenticated)) {
       return;
     }
     const stopStream = startEventStream();
     return () => {
       stopStream();
     };
-  }, [authRequired, authenticated, startEventStream]);
+  }, [authChecked, authRequired, authenticated, startEventStream]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {

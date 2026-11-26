@@ -195,4 +195,107 @@ describe('useBoardStore', () => {
     expect(store.getState().graph?.board.id).toBe('board-imported');
     expect(store.getState().graph?.cards).toHaveLength(2);
   });
+
+  it('falls back to another board when the active board is deleted externally', async () => {
+    const board1 = makeBoard('board-1');
+    const board2 = makeBoard('board-2');
+    board2.title = 'Fallback Board';
+    const graph1: BoardGraph = {
+      board: board1,
+      cards: [makeCard('c1', 'Card on Board 1')],
+      edges: [],
+      attachments: [],
+    };
+    const graph2: BoardGraph = {
+      board: board2,
+      cards: [],
+      edges: [],
+      attachments: [],
+    };
+
+    let board1Deleted = false;
+    let capturedOnEvent: ((event: GraphEvent) => void) | undefined;
+
+    const api = {
+      listBoards: vi.fn().mockImplementation(() =>
+        Promise.resolve(board1Deleted ? [board2] : [board1, board2])
+      ),
+      getBoardGraph: vi.fn().mockImplementation((id: string) => {
+        if (id === 'board-1') return Promise.resolve(graph1);
+        return Promise.resolve(graph2);
+      }),
+      subscribeEvents: vi
+        .fn()
+        .mockImplementation((handlers: { onEvent: (e: GraphEvent) => void }) => {
+          capturedOnEvent = handlers.onEvent;
+          return vi.fn();
+        }),
+    } as unknown as AriadeckApiClient;
+
+    const store = createBoardStore(api);
+    await store.getState().initialize();
+    store.getState().selectCard('c1');
+    store.getState().openLightbox('c1', 'att-1');
+    const unsubscribe = store.getState().startEventStream();
+
+    board1Deleted = true;
+    capturedOnEvent?.({
+      type: 'board:deleted',
+      boardId: 'board-1',
+      entityIds: ['board-1'],
+      deviceId: 'ariadeck-mcp-server',
+      timestamp: NOW,
+    });
+
+    await vi.waitFor(() => {
+      expect(store.getState().activeBoardId).toBe('board-2');
+    });
+    expect(store.getState().graph?.board.id).toBe('board-2');
+    expect(store.getState().selectedCardId).toBeNull();
+    expect(store.getState().lightboxState).toBeNull();
+    unsubscribe();
+  });
+
+  it('refreshes the active board when SSE reconnects after a disconnect', async () => {
+    const board = makeBoard('board-1');
+    const initialGraph: BoardGraph = { board, cards: [], edges: [], attachments: [] };
+    const updatedGraph: BoardGraph = {
+      board,
+      cards: [makeCard('c-new', 'Added while offline')],
+      edges: [],
+      attachments: [],
+    };
+
+    let currentGraph = initialGraph;
+    let handlersRef:
+      | { onConnected?: () => void; onError?: () => void; onEvent: (e: GraphEvent) => void }
+      | undefined;
+
+    const api = {
+      listBoards: vi.fn().mockResolvedValue([board]),
+      getBoardGraph: vi.fn().mockImplementation(() => Promise.resolve(currentGraph)),
+      subscribeEvents: vi.fn().mockImplementation((handlers) => {
+        handlersRef = handlers;
+        return vi.fn();
+      }),
+    } as unknown as AriadeckApiClient;
+
+    const store = createBoardStore(api);
+    expect(store.getState().authChecked).toBe(false);
+    await store.getState().initialize();
+    expect(store.getState().authChecked).toBe(true);
+
+    const unsubscribe = store.getState().startEventStream();
+    handlersRef?.onError?.();
+    expect(store.getState().connectionStatus).toBe('disconnected');
+
+    currentGraph = updatedGraph;
+    handlersRef?.onConnected?.();
+
+    await vi.waitFor(() => {
+      expect(store.getState().graph?.cards).toHaveLength(1);
+    });
+    expect(store.getState().connectionStatus).toBe('connected');
+    unsubscribe();
+  });
 });

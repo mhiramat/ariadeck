@@ -47,6 +47,7 @@ export interface BoardStoreState {
   conflicts: ConflictRecord[];
   syncConfigured: boolean;
   syncing: boolean;
+  authChecked: boolean;
   authRequired: boolean;
   authenticated: boolean;
   authError: string | null;
@@ -218,6 +219,7 @@ export function createBoardStore(api: AriadeckApiClient = createAriadeckApiClien
     conflicts: [],
     syncConfigured: false,
     syncing: false,
+    authChecked: false,
     authRequired: false,
     authenticated: true,
     authError: null,
@@ -251,6 +253,7 @@ export function createBoardStore(api: AriadeckApiClient = createAriadeckApiClien
               authStatus = await api.login(fragmentToken);
             } catch (error) {
               set({
+                authChecked: true,
                 authRequired: true,
                 authenticated: false,
                 authError:
@@ -264,6 +267,7 @@ export function createBoardStore(api: AriadeckApiClient = createAriadeckApiClien
             }
           }
           set({
+            authChecked: true,
             authRequired: authStatus.authRequired,
             authenticated: authStatus.authenticated,
           });
@@ -271,6 +275,8 @@ export function createBoardStore(api: AriadeckApiClient = createAriadeckApiClien
             set({ loading: false, connectionStatus: 'disconnected' });
             return;
           }
+        } else {
+          set({ authChecked: true });
         }
 
         let boards = await api.listBoards();
@@ -317,6 +323,7 @@ export function createBoardStore(api: AriadeckApiClient = createAriadeckApiClien
       try {
         const status = await api.login(token);
         set({
+          authChecked: true,
           authRequired: status.authRequired,
           authenticated: status.authenticated,
           authError: null,
@@ -339,6 +346,7 @@ export function createBoardStore(api: AriadeckApiClient = createAriadeckApiClien
         // Clear local state regardless of network failure.
       }
       set({
+        authChecked: true,
         authenticated: false,
         graph: null,
         boards: [],
@@ -465,24 +473,48 @@ export function createBoardStore(api: AriadeckApiClient = createAriadeckApiClien
       const switchId = boardSwitchSeq;
       try {
         const boards = await api.listBoards();
-        if (!requestedBoardId) {
-          set({ boards });
+        if (boards.length === 0) {
+          if (get().activeBoardId === requestedBoardId && switchId === boardSwitchSeq) {
+            set({
+              boards,
+              activeBoardId: null,
+              graph: null,
+              selectedCardId: null,
+              lightboxState: null,
+            });
+          } else {
+            set({ boards });
+          }
           return;
         }
-        const graph = await api.getBoardGraph(requestedBoardId);
+
+        const targetBoardId =
+          requestedBoardId && boards.some((b) => b.id === requestedBoardId)
+            ? requestedBoardId
+            : boards[0]!.id;
+
+        const graph = await api.getBoardGraph(targetBoardId);
         // Ignore stale graph responses if the user switched/imported another board while in flight
         if (get().activeBoardId !== requestedBoardId || switchId !== boardSwitchSeq) {
           set({ boards });
           return;
         }
-        const currentSelectedCardId = get().selectedCardId;
+
+        const switchedBoard = targetBoardId !== requestedBoardId;
+        const currentSelectedCardId = switchedBoard ? null : get().selectedCardId;
         const stillExists =
           currentSelectedCardId !== null &&
           graph.cards.some((c) => c.id === currentSelectedCardId);
+        const nextViewMode =
+          (graph.board.boardType ?? 'flow') === 'flat' ? 'graph' : get().viewMode;
+
         set({
           boards,
+          activeBoardId: targetBoardId,
           graph,
           selectedCardId: stillExists ? currentSelectedCardId : null,
+          lightboxState: switchedBoard ? null : get().lightboxState,
+          viewMode: nextViewMode,
         });
       } catch {
         // Ignore transient refresh failures.
@@ -850,10 +882,17 @@ export function createBoardStore(api: AriadeckApiClient = createAriadeckApiClien
 
     startEventStream: () => {
       return api.subscribeEvents({
-        onConnected: () => set({ connectionStatus: 'connected' }),
+        onConnected: () => {
+          const wasDisconnected = get().connectionStatus === 'disconnected';
+          set({ connectionStatus: 'connected' });
+          if (wasDisconnected) {
+            void get().refreshActiveBoard();
+          }
+        },
         onError: () => set({ connectionStatus: 'disconnected' }),
         onEvent: (event: GraphEvent) => {
-          if (event.boardId && event.boardId !== get().activeBoardId) {
+          const currentActiveId = get().activeBoardId;
+          if (event.boardId && currentActiveId !== null && event.boardId !== currentActiveId) {
             void api
               .listBoards()
               .then((boards) => set({ boards }))
