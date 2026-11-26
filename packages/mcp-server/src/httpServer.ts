@@ -14,6 +14,7 @@ import {
   type CardDisplayMode,
   type CardType,
   type ConflictResolutionAction,
+  type ExternalChangeSource,
   type MutationContext,
   type SupportedImageMimeType,
 } from '@ariadeck/core';
@@ -22,6 +23,7 @@ import {
   SESSION_COOKIE_NAME,
   SessionAuthManager,
 } from './auth.js';
+import { ExternalChangeWatcher } from './externalChangeWatcher.js';
 import { resolveImageSourceBytes } from './mediaSource.js';
 
 export interface HttpAppOptions {
@@ -30,6 +32,9 @@ export interface HttpAppOptions {
   authToken?: string | null;
   authManager?: SessionAuthManager;
   allowedOrigins?: string[];
+  externalChangeSource?: ExternalChangeSource;
+  externalChangePollIntervalMs?: number;
+  externalChangeWatcher?: ExternalChangeWatcher;
 }
 
 export const MCP_SERVER_NAME = 'ariadeck-mcp';
@@ -108,6 +113,17 @@ export function createHttpApp(
   const auth =
     options.authManager ?? new SessionAuthManager(options.authToken ?? null);
   const extraOrigins = options.allowedOrigins ?? [];
+  const externalWatcher =
+    options.externalChangeWatcher ??
+    (options.externalChangeSource
+      ? new ExternalChangeWatcher(options.externalChangeSource, service.eventBus, {
+          pollIntervalMs: options.externalChangePollIntervalMs,
+          onError: (err) => {
+            console.error('[ariadeck-mcp] External DB watch error:', err);
+          },
+        })
+      : null);
+  let activeSseClients = 0;
 
   const app = express();
   app.use(
@@ -178,6 +194,11 @@ export function createHttpApp(
     res.setHeader('Connection', 'keep-alive');
     res.flushHeaders?.();
 
+    activeSseClients += 1;
+    if (activeSseClients === 1 && externalWatcher) {
+      externalWatcher.start({ syncCursorFirst: true });
+    }
+
     res.write(`event: connected\ndata: ${JSON.stringify({ status: 'connected' })}\n\n`);
 
     const unsubscribe = service.eventBus.subscribe((event) => {
@@ -188,9 +209,16 @@ export function createHttpApp(
       res.write(': keep-alive\n\n');
     }, 25000);
 
+    let closed = false;
     req.on('close', () => {
+      if (closed) return;
+      closed = true;
       clearInterval(keepAliveTimer);
       unsubscribe();
+      activeSseClients = Math.max(0, activeSseClients - 1);
+      if (activeSseClients === 0 && externalWatcher) {
+        externalWatcher.stop();
+      }
       res.end();
     });
   });

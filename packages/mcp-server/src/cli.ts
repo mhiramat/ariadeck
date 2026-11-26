@@ -13,6 +13,7 @@ import {
 import { SqliteStorageAdapter } from '@ariadeck/core/sqlite';
 import { NodeMediaStorageAdapter } from '@ariadeck/core/media-node';
 import { SessionAuthManager } from './auth.js';
+import { ExternalChangeWatcher } from './externalChangeWatcher.js';
 import { createHttpApp } from './httpServer.js';
 import { createAriadeckMcpServer, MCP_DEVICE_ID } from './mcpServer.js';
 import {
@@ -117,11 +118,18 @@ async function main(): Promise<void> {
       .map((s) => s.trim())
       .filter(Boolean);
 
+    const externalChangeWatcher = new ExternalChangeWatcher(storage, service.eventBus, {
+      onError: (err) => {
+        console.error('[ariadeck-mcp] External DB watch error:', err);
+      },
+    });
+
     const app = createHttpApp(service, {
       syncEngine,
       mediaService,
       authManager,
       allowedOrigins,
+      externalChangeWatcher,
     });
 
     // Expose stateless Streamable HTTP MCP transport protected by the same auth middleware
@@ -185,6 +193,7 @@ async function main(): Promise<void> {
     });
 
     const shutdown = async () => {
+      externalChangeWatcher.stop();
       server.close();
       await storage.close();
       process.exit(0);
