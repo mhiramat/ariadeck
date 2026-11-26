@@ -6,6 +6,7 @@ import { AuthGate } from './AuthGate.tsx';
 import { BoardListPanel } from './BoardListPanel.tsx';
 import { ConflictResolverModal } from './ConflictResolverModal.tsx';
 import { GraphCanvas } from './GraphCanvas.tsx';
+import { ImageLightboxModal } from './ImageLightboxModal.tsx';
 import { InspectorPanel } from './InspectorPanel.tsx';
 import { TimelineView } from './TimelineView.tsx';
 
@@ -65,6 +66,8 @@ export function DesktopAppShell() {
   const initialize = useBoardStore((s) => s.initialize);
   const startEventStream = useBoardStore((s) => s.startEventStream);
   const selectCard = useBoardStore((s) => s.selectCard);
+  const lightboxState = useBoardStore((s) => s.lightboxState);
+  const closeLightbox = useBoardStore((s) => s.closeLightbox);
 
   useEffect(() => {
     void initialize();
@@ -83,12 +86,16 @@ export function DesktopAppShell() {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        selectCard(null);
+        if (lightboxState) {
+          closeLightbox();
+        } else {
+          selectCard(null);
+        }
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [selectCard]);
+  }, [lightboxState, closeLightbox, selectCard]);
 
   if (authRequired && !authenticated) {
     return <AuthGate />;
@@ -105,6 +112,7 @@ export function DesktopAppShell() {
 
         <InspectorPanel />
         <ConflictResolverModal />
+        <ImageLightboxModal />
 
         {toasts.length > 0 && (
           <div

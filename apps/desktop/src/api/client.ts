@@ -5,6 +5,8 @@ import type {
   BoardGraph,
   BoardType,
   Card,
+  CardAttachment,
+  CardDisplayMode,
   CardStatus,
   CardType,
   ConflictRecord,
@@ -13,6 +15,7 @@ import type {
   EdgeDirection,
   EdgeStyleVariant,
   GraphEvent,
+  ImageAttachmentResult,
   JsonExportResult,
   MarkdownExportResult,
   RelationType,
@@ -22,6 +25,14 @@ import type {
   SyncBoardResult,
   TimelineSortResult,
 } from '@ariadeck/core';
+
+export function buildMediaThumbUrl(attachmentId: string, baseUrl = ''): string {
+  return `${baseUrl}/api/media/attachments/${encodeURIComponent(attachmentId)}/thumb`;
+}
+
+export function buildMediaOriginalUrl(attachmentId: string, baseUrl = ''): string {
+  return `${baseUrl}/api/media/attachments/${encodeURIComponent(attachmentId)}/original`;
+}
 
 export class ApiError extends Error {
   public readonly status: number;
@@ -59,6 +70,7 @@ export interface AriadeckApiClient {
     title: string;
     content?: string;
     cardType?: CardType;
+    displayMode?: CardDisplayMode;
     status?: CardStatus;
     tags?: string[];
     posX?: number;
@@ -70,6 +82,7 @@ export interface AriadeckApiClient {
       title?: string;
       content?: string;
       cardType?: CardType;
+      displayMode?: CardDisplayMode;
       status?: CardStatus;
       tags?: string[];
       posX?: number;
@@ -80,6 +93,36 @@ export interface AriadeckApiClient {
     }
   ): Promise<Card>;
   deleteCard(cardId: string): Promise<void>;
+  attachImageToCard(
+    cardId: string,
+    file: Blob,
+    options?: {
+      caption?: string;
+      setAsCover?: boolean;
+      displayMode?: CardDisplayMode;
+    }
+  ): Promise<ImageAttachmentResult>;
+  createImageCard(input: {
+    boardId: string;
+    title: string;
+    file: Blob;
+    content?: string;
+    caption?: string;
+    cardType?: CardType;
+    displayMode?: CardDisplayMode;
+    posX?: number;
+    posY?: number;
+  }): Promise<ImageAttachmentResult>;
+  updateAttachment(
+    attachmentId: string,
+    patch: {
+      caption?: string | null;
+      isCover?: boolean;
+      sortOrder?: number;
+    }
+  ): Promise<CardAttachment>;
+  reorderCardAttachments(cardId: string, attachmentIds: string[]): Promise<CardAttachment[]>;
+  removeAttachment(attachmentId: string): Promise<void>;
   connectCards(input: {
     boardId: string;
     sourceCardId: string;
@@ -218,6 +261,71 @@ export function createAriadeckApiClient(baseUrl = ''): AriadeckApiClient {
     },
     deleteCard: async (cardId) => {
       await request<void>(`/api/cards/${cardId}`, { method: 'DELETE' });
+    },
+    attachImageToCard: async (cardId, file, options = {}) => {
+      const params = new URLSearchParams();
+      if (options.caption !== undefined) params.set('caption', options.caption);
+      if (options.setAsCover !== undefined) params.set('setAsCover', String(options.setAsCover));
+      if (options.displayMode !== undefined) params.set('displayMode', options.displayMode);
+      const qs = params.toString();
+      const contentType =
+        file.type === 'image/jpeg' || file.type === 'image/png'
+          ? file.type
+          : 'application/octet-stream';
+      return request<ImageAttachmentResult>(
+        `/api/cards/${encodeURIComponent(cardId)}/attachments/image${qs ? `?${qs}` : ''}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': contentType },
+          body: file,
+        }
+      );
+    },
+    createImageCard: async (input) => {
+      const params = new URLSearchParams({
+        boardId: input.boardId,
+        title: input.title,
+      });
+      if (input.content !== undefined) params.set('content', input.content);
+      if (input.caption !== undefined) params.set('caption', input.caption);
+      if (input.cardType !== undefined) params.set('cardType', input.cardType);
+      if (input.displayMode !== undefined) params.set('displayMode', input.displayMode);
+      if (input.posX !== undefined) params.set('posX', String(Math.round(input.posX)));
+      if (input.posY !== undefined) params.set('posY', String(Math.round(input.posY)));
+      const contentType =
+        input.file.type === 'image/jpeg' || input.file.type === 'image/png'
+          ? input.file.type
+          : 'application/octet-stream';
+      return request<ImageAttachmentResult>(`/api/cards/image?${params.toString()}`, {
+        method: 'POST',
+        headers: { 'Content-Type': contentType },
+        body: input.file,
+      });
+    },
+    updateAttachment: async (attachmentId, patch) => {
+      const data = await request<{ attachment: CardAttachment }>(
+        `/api/attachments/${encodeURIComponent(attachmentId)}`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify(patch),
+        }
+      );
+      return data.attachment;
+    },
+    reorderCardAttachments: async (cardId, attachmentIds) => {
+      const data = await request<{ attachments: CardAttachment[] }>(
+        `/api/cards/${encodeURIComponent(cardId)}/attachments/reorder`,
+        {
+          method: 'PUT',
+          body: JSON.stringify({ attachmentIds }),
+        }
+      );
+      return data.attachments;
+    },
+    removeAttachment: async (attachmentId) => {
+      await request<void>(`/api/attachments/${encodeURIComponent(attachmentId)}`, {
+        method: 'DELETE',
+      });
     },
     connectCards: async (input) => {
       const data = await request<{ edge: Edge }>('/api/edges', {

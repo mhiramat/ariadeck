@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type DragEvent,
+  type MouseEvent,
+} from 'react';
 import {
   Background,
   ConnectionMode,
@@ -16,6 +24,7 @@ import {
 import '@xyflow/react/dist/style.css';
 import type {
   BoardType,
+  CardAttachment,
   CardType,
   EdgeDirection,
   EdgeStyleVariant,
@@ -28,6 +37,10 @@ import {
   resolveEdgeHandles,
   type CardDimensions,
 } from '../utils/autoLayout.ts';
+import {
+  filterSupportedImageFiles,
+  titleFromImageFilename,
+} from '../utils/imageFiles.ts';
 import { IdeaCardNode, type IdeaCardFlowNode } from './IdeaCardNode.tsx';
 import { DependencyEdge, type DependencyFlowEdge } from './DependencyEdge.tsx';
 import { CanvasQuickToolbar } from './CanvasQuickToolbar.tsx';
@@ -45,7 +58,10 @@ function GraphCanvasInner() {
   const graph = useBoardStore((s) => s.graph);
   const selectedCardId = useBoardStore((s) => s.selectedCardId);
   const selectCard = useBoardStore((s) => s.selectCard);
+  const openLightbox = useBoardStore((s) => s.openLightbox);
   const createCard = useBoardStore((s) => s.createCard);
+  const createImageCard = useBoardStore((s) => s.createImageCard);
+  const attachImageToCard = useBoardStore((s) => s.attachImageToCard);
   const updateCard = useBoardStore((s) => s.updateCard);
   const updateCardPositions = useBoardStore((s) => s.updateCardPositions);
   const connectCards = useBoardStore((s) => s.connectCards);
@@ -56,6 +72,8 @@ function GraphCanvasInner() {
   const [nodes, setNodes, onNodesChange] = useNodesState<IdeaCardFlowNode>([]);
   const [flatEdgeDirection, setFlatEdgeDirection] = useState<EdgeDirection>('directed');
   const [jumpBackMode, setJumpBackMode] = useState(false);
+  const [isDraggingFiles, setIsDraggingFiles] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
   const lastFittedBoardIdRef = useRef<string | null>(null);
 
   const boardType: BoardType = graph?.board.boardType ?? 'flow';
@@ -65,6 +83,17 @@ function GraphCanvasInner() {
       void updateCard(cardId, { title });
     },
     [updateCard]
+  );
+
+  const handleDropImagesOnCard = useCallback(
+    (cardId: string, files: File[]) => {
+      void (async () => {
+        for (const file of files) {
+          await attachImageToCard(cardId, file);
+        }
+      })();
+    },
+    [attachImageToCard]
   );
 
   const handleUpdateEdge = useCallback(
@@ -97,8 +126,20 @@ function GraphCanvasInner() {
       return;
     }
     const attachmentCounts = new Map<string, number>();
+    const imagesByCard = new Map<string, CardAttachment[]>();
     for (const att of graph.attachments) {
       attachmentCounts.set(att.cardId, (attachmentCounts.get(att.cardId) ?? 0) + 1);
+      if (att.kind === 'image') {
+        const list = imagesByCard.get(att.cardId);
+        if (list) list.push(att);
+        else imagesByCard.set(att.cardId, [att]);
+      }
+    }
+    for (const list of imagesByCard.values()) {
+      list.sort(
+        (a, b) =>
+          (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.createdAt.localeCompare(b.createdAt)
+      );
     }
 
     setNodes((prevNodes) => {
@@ -114,7 +155,10 @@ function GraphCanvasInner() {
           data: {
             card,
             attachmentCount: attachmentCounts.get(card.id) ?? 0,
+            imageAttachments: imagesByCard.get(card.id) ?? [],
             onRename: handleRename,
+            onOpenLightbox: openLightbox,
+            onDropImageFiles: handleDropImagesOnCard,
           },
         };
       });
@@ -128,7 +172,15 @@ function GraphCanvasInner() {
         });
       }
     }
-  }, [graph, selectedCardId, handleRename, setNodes, fitView]);
+  }, [
+    graph,
+    selectedCardId,
+    handleRename,
+    openLightbox,
+    handleDropImagesOnCard,
+    setNodes,
+    fitView,
+  ]);
 
   const edges: DependencyFlowEdge[] = useMemo(() => {
     if (!graph) return [];
@@ -306,11 +358,125 @@ function GraphCanvasInner() {
     );
   }, [graph, boardType, nodes, setNodes, updateCardPositions, fitView, pushToast]);
 
+  // Clipboard paste (Ctrl/Cmd + V) for JPEG/PNG images
+  useEffect(() => {
+    const handlePaste = (event: ClipboardEvent) => {
+      const active = document.activeElement as HTMLElement | null;
+      if (
+        active &&
+        (active.tagName === 'INPUT' ||
+          active.tagName === 'TEXTAREA' ||
+          active.isContentEditable)
+      ) {
+        return;
+      }
+
+      const items = event.clipboardData?.items;
+      const filesFromItems: File[] = [];
+      if (items) {
+        for (const item of Array.from(items)) {
+          if (item.kind === 'file') {
+            const f = item.getAsFile();
+            if (f) filesFromItems.push(f);
+          }
+        }
+      }
+      const candidateFiles =
+        filesFromItems.length > 0
+          ? filesFromItems
+          : Array.from(event.clipboardData?.files ?? []);
+      const imageFiles = filterSupportedImageFiles(candidateFiles);
+      if (imageFiles.length === 0) return;
+
+      event.preventDefault();
+      void (async () => {
+        if (selectedCardId) {
+          for (const file of imageFiles) {
+            await attachImageToCard(selectedCardId, file);
+          }
+        } else {
+          const rect = containerRef.current?.getBoundingClientRect();
+          const centerPos = rect
+            ? screenToFlowPosition({
+                x: rect.left + rect.width / 2,
+                y: rect.top + rect.height / 2,
+              })
+            : { x: 160, y: 160 };
+          for (let i = 0; i < imageFiles.length; i++) {
+            const file = imageFiles[i]!;
+            await createImageCard({
+              title: titleFromImageFilename(file.name, 'Pasted Image'),
+              file,
+              displayMode: 'image_cover',
+              posX: Math.round(centerPos.x + i * 36),
+              posY: Math.round(centerPos.y + i * 36),
+            });
+          }
+        }
+      })();
+    };
+
+    window.addEventListener('paste', handlePaste);
+    return () => window.removeEventListener('paste', handlePaste);
+  }, [selectedCardId, attachImageToCard, createImageCard, screenToFlowPosition]);
+
+  const handleCanvasDragOver = useCallback((event: DragEvent<HTMLDivElement>) => {
+    if (!event.dataTransfer?.types.includes('Files')) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+    setIsDraggingFiles(true);
+  }, []);
+
+  const handleCanvasDragLeave = useCallback((event: DragEvent<HTMLDivElement>) => {
+    if (event.currentTarget.contains(event.relatedTarget as globalThis.Node | null)) return;
+    setIsDraggingFiles(false);
+  }, []);
+
+  const handleCanvasDrop = useCallback(
+    (event: DragEvent<HTMLDivElement>) => {
+      if (!event.dataTransfer?.files?.length) return;
+      event.preventDefault();
+      setIsDraggingFiles(false);
+
+      const imageFiles = filterSupportedImageFiles(event.dataTransfer.files);
+      if (imageFiles.length === 0) {
+        pushToast('error', 'Only JPEG (.jpg) and PNG (.png) image files are supported.');
+        return;
+      }
+
+      const dropPos = screenToFlowPosition({ x: event.clientX, y: event.clientY });
+      void (async () => {
+        for (let i = 0; i < imageFiles.length; i++) {
+          const file = imageFiles[i]!;
+          await createImageCard({
+            title: titleFromImageFilename(file.name, 'Image Card'),
+            file,
+            displayMode: 'image_cover',
+            posX: Math.round(dropPos.x + i * 36),
+            posY: Math.round(dropPos.y + i * 36),
+          });
+        }
+      })();
+    },
+    [screenToFlowPosition, createImageCard, pushToast]
+  );
+
   return (
     <div
+      ref={containerRef}
       className="relative h-full w-full flex-1 bg-slate-950"
       onDoubleClick={handlePaneDoubleClick}
+      onDragOver={handleCanvasDragOver}
+      onDragLeave={handleCanvasDragLeave}
+      onDrop={handleCanvasDrop}
     >
+      {isDraggingFiles && (
+        <div className="pointer-events-none absolute inset-4 z-40 flex items-center justify-center rounded-2xl border-2 border-dashed border-sky-400/80 bg-slate-950/70 backdrop-blur-[1px]">
+          <div className="rounded-xl border border-sky-400/40 bg-slate-900/95 px-5 py-3 text-sm font-semibold text-sky-200 shadow-xl">
+            Drop JPEG or PNG images to create card(s) — or drop onto an existing card to attach
+          </div>
+        </div>
+      )}
       <ReactFlow
         nodes={nodes}
         edges={edges}

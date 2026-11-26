@@ -5,6 +5,8 @@ import type {
   BoardGraph,
   BoardType,
   Card,
+  CardAttachment,
+  CardDisplayMode,
   CardStatus,
   CardType,
   ConflictRecord,
@@ -12,6 +14,7 @@ import type {
   EdgeDirection,
   EdgeStyleVariant,
   GraphEvent,
+  ImageAttachmentResult,
   JsonExportResult,
   MarkdownExportResult,
   RelationType,
@@ -28,11 +31,17 @@ export interface ToastNotification {
   message: string;
 }
 
+export interface LightboxState {
+  cardId: string;
+  attachmentId: string;
+}
+
 export interface BoardStoreState {
   boards: Board[];
   activeBoardId: string | null;
   graph: BoardGraph | null;
   selectedCardId: string | null;
+  lightboxState: LightboxState | null;
   boardListOpen: boolean;
   conflictModalOpen: boolean;
   conflicts: ConflictRecord[];
@@ -70,12 +79,15 @@ export interface BoardStoreState {
   toggleBoardList: () => void;
   setBoardListOpen: (open: boolean) => void;
   selectCard: (cardId: string | null) => void;
+  openLightbox: (cardId: string, attachmentId: string) => void;
+  closeLightbox: () => void;
   setViewMode: (mode: DesktopViewMode) => void;
 
   createCard: (input: {
     title: string;
     content?: string;
     cardType?: CardType;
+    displayMode?: CardDisplayMode;
     posX?: number;
     posY?: number;
   }) => Promise<Card | null>;
@@ -85,6 +97,7 @@ export interface BoardStoreState {
       title?: string;
       content?: string;
       cardType?: CardType;
+      displayMode?: CardDisplayMode;
       status?: CardStatus;
       tags?: string[];
       posX?: number;
@@ -98,6 +111,35 @@ export interface BoardStoreState {
     positions: Array<{ cardId: string; posX: number; posY: number }>
   ) => Promise<void>;
   deleteCard: (cardId: string) => Promise<void>;
+  attachImageToCard: (
+    cardId: string,
+    file: Blob,
+    options?: {
+      caption?: string;
+      setAsCover?: boolean;
+      displayMode?: CardDisplayMode;
+    }
+  ) => Promise<ImageAttachmentResult | null>;
+  createImageCard: (input: {
+    title: string;
+    file: Blob;
+    content?: string;
+    caption?: string;
+    cardType?: CardType;
+    displayMode?: CardDisplayMode;
+    posX?: number;
+    posY?: number;
+  }) => Promise<ImageAttachmentResult | null>;
+  updateAttachment: (
+    attachmentId: string,
+    patch: {
+      caption?: string | null;
+      isCover?: boolean;
+      sortOrder?: number;
+    }
+  ) => Promise<CardAttachment | null>;
+  reorderCardAttachments: (cardId: string, attachmentIds: string[]) => Promise<void>;
+  removeAttachment: (attachmentId: string) => Promise<void>;
   connectCards: (
     sourceCardId: string,
     targetCardId: string,
@@ -170,6 +212,7 @@ export function createBoardStore(api: AriadeckApiClient = createAriadeckApiClien
     activeBoardId: null,
     graph: null,
     selectedCardId: null,
+    lightboxState: null,
     boardListOpen: false,
     conflictModalOpen: false,
     conflicts: [],
@@ -447,6 +490,8 @@ export function createBoardStore(api: AriadeckApiClient = createAriadeckApiClien
     },
 
     selectCard: (cardId) => set({ selectedCardId: cardId }),
+    openLightbox: (cardId, attachmentId) => set({ lightboxState: { cardId, attachmentId } }),
+    closeLightbox: () => set({ lightboxState: null }),
 
     setViewMode: (mode) => set({ viewMode: mode }),
 
@@ -499,12 +544,89 @@ export function createBoardStore(api: AriadeckApiClient = createAriadeckApiClien
         await api.deleteCard(cardId);
         set((state) => ({
           selectedCardId: state.selectedCardId === cardId ? null : state.selectedCardId,
+          lightboxState: state.lightboxState?.cardId === cardId ? null : state.lightboxState,
         }));
         await get().refreshActiveBoard();
       } catch (error) {
         get().pushToast(
           'error',
           error instanceof Error ? error.message : 'Failed to delete card.'
+        );
+      }
+    },
+
+    attachImageToCard: async (cardId, file, options = {}) => {
+      try {
+        const result = await api.attachImageToCard(cardId, file, options);
+        await get().refreshActiveBoard();
+        get().pushToast('success', 'Image attached to card.');
+        return result;
+      } catch (error) {
+        get().pushToast(
+          'error',
+          error instanceof Error ? error.message : 'Failed to attach image.'
+        );
+        return null;
+      }
+    },
+
+    createImageCard: async (input) => {
+      const boardId = get().activeBoardId;
+      if (!boardId) return null;
+      try {
+        const result = await api.createImageCard({ boardId, ...input });
+        await get().refreshActiveBoard();
+        set({ selectedCardId: result.card.id });
+        get().pushToast('success', `Created image card "${result.card.title}".`);
+        return result;
+      } catch (error) {
+        get().pushToast(
+          'error',
+          error instanceof Error ? error.message : 'Failed to create image card.'
+        );
+        return null;
+      }
+    },
+
+    updateAttachment: async (attachmentId, patch) => {
+      try {
+        const updated = await api.updateAttachment(attachmentId, patch);
+        await get().refreshActiveBoard();
+        return updated;
+      } catch (error) {
+        get().pushToast(
+          'error',
+          error instanceof Error ? error.message : 'Failed to update image attachment.'
+        );
+        return null;
+      }
+    },
+
+    reorderCardAttachments: async (cardId, attachmentIds) => {
+      try {
+        await api.reorderCardAttachments(cardId, attachmentIds);
+        await get().refreshActiveBoard();
+      } catch (error) {
+        get().pushToast(
+          'error',
+          error instanceof Error ? error.message : 'Failed to reorder image attachments.'
+        );
+      }
+    },
+
+    removeAttachment: async (attachmentId) => {
+      try {
+        await api.removeAttachment(attachmentId);
+        set((state) => ({
+          lightboxState:
+            state.lightboxState?.attachmentId === attachmentId ? null : state.lightboxState,
+        }));
+        await get().refreshActiveBoard();
+        get().pushToast('info', 'Image attachment removed.');
+      } catch (error) {
+        get().pushToast(
+          'error',
+          error instanceof Error ? error.message : 'Failed to remove attachment.'
         );
       }
     },
