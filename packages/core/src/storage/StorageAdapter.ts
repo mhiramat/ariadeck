@@ -10,6 +10,20 @@ import type {
 export type NewSyncOutboxEntry = Omit<SyncOutboxEntry, 'seq'>;
 
 /**
+ * Optional capability implemented by multi-process storage backends (such as
+ * SqliteStorageAdapter) so a long-lived server can detect commits written by
+ * external processes (e.g. stdio MCP workers) without colliding with its own
+ * in-process mutations.
+ */
+export interface ExternalChangeSource {
+  getDataVersion(): number;
+  getLatestOutboxSeq(): number;
+  listOutboxSince(afterSeq: number, limit?: number): SyncOutboxEntry[];
+  isOwnOutboxSeq(seq: number): boolean;
+  pruneOwnOutboxSeqsUpTo?(seq: number): void;
+}
+
+/**
  * Pluggable persistence interface implemented by SQLite (Node/Desktop/Android)
  * and in-memory (tests/browser previews) storage backends.
  */

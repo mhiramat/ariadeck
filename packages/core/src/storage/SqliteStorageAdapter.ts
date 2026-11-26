@@ -24,7 +24,11 @@ import {
   SCHEMA_V2_INDEX_STATEMENTS,
   SCHEMA_V3_INDEX_STATEMENTS,
 } from './schema.js';
-import type { NewSyncOutboxEntry, StorageAdapter } from './StorageAdapter.js';
+import type {
+  ExternalChangeSource,
+  NewSyncOutboxEntry,
+  StorageAdapter,
+} from './StorageAdapter.js';
 
 interface BoardRow {
   id: string;
@@ -260,18 +264,34 @@ function mapConflictRow(row: ConflictRow): ConflictRecord {
   };
 }
 
+const MAX_TRACKED_OWN_OUTBOX_SEQS = 10_000;
+
 /**
  * Node.js SQLite StorageAdapter backed by better-sqlite3.
  * Defaults to "./ariadeck.db" unless overridden via the constructor argument
  * or the ARIADECK_DB_PATH environment variable.
  */
-export class SqliteStorageAdapter implements StorageAdapter {
+export class SqliteStorageAdapter implements StorageAdapter, ExternalChangeSource {
   private readonly dbPath: string;
   private db: Database.Database | null = null;
   private txDepth = 0;
+  private readonly ownOutboxSeqs = new Set<number>();
 
   constructor(dbPath = process.env.ARIADECK_DB_PATH ?? './ariadeck.db') {
     this.dbPath = dbPath;
+  }
+
+  private recordOwnOutboxSeq(seq: number): void {
+    this.ownOutboxSeqs.add(seq);
+    if (this.ownOutboxSeqs.size > MAX_TRACKED_OWN_OUTBOX_SEQS) {
+      const excess = this.ownOutboxSeqs.size - MAX_TRACKED_OWN_OUTBOX_SEQS;
+      let removed = 0;
+      for (const oldSeq of this.ownOutboxSeqs) {
+        this.ownOutboxSeqs.delete(oldSeq);
+        removed += 1;
+        if (removed >= excess) break;
+      }
+    }
   }
 
   private getDb(): Database.Database {
@@ -396,6 +416,7 @@ export class SqliteStorageAdapter implements StorageAdapter {
     }
     const db = new Database(this.dbPath);
     db.pragma('journal_mode = WAL');
+    db.pragma('busy_timeout = 5000');
     db.pragma('foreign_keys = ON');
     for (const ddl of SCHEMA_DDL_STATEMENTS) {
       db.exec(ddl);
@@ -410,6 +431,7 @@ export class SqliteStorageAdapter implements StorageAdapter {
       this.db.close();
       this.db = null;
     }
+    this.ownOutboxSeqs.clear();
   }
 
   async runInTransaction<T>(fn: () => Promise<T>): Promise<T> {
@@ -699,10 +721,62 @@ export class SqliteStorageAdapter implements StorageAdapter {
         )`
       )
       .run(entry);
+    const seq = Number(result.lastInsertRowid);
+    this.recordOwnOutboxSeq(seq);
     return {
       ...entry,
-      seq: Number(result.lastInsertRowid),
+      seq,
     };
+  }
+
+  /**
+   * Returns SQLite's PRAGMA data_version counter, which increments whenever
+   * another database connection commits changes to the shared SQLite file.
+   */
+  getDataVersion(): number {
+    const db = this.getDb();
+    return Number(db.pragma('data_version', { simple: true }));
+  }
+
+  /**
+   * Returns the highest sequence number currently stored in sync_outbox (or 0 if empty).
+   */
+  getLatestOutboxSeq(): number {
+    const db = this.getDb();
+    const row = db
+      .prepare('SELECT COALESCE(MAX(seq), 0) AS max_seq FROM sync_outbox')
+      .get() as { max_seq: number };
+    return Number(row.max_seq);
+  }
+
+  /**
+   * Lists sync_outbox entries with seq strictly greater than afterSeq in ascending order.
+   */
+  listOutboxSince(afterSeq: number, limit = 200): SyncOutboxEntry[] {
+    const db = this.getDb();
+    const safeLimit = Math.max(1, Math.floor(limit));
+    const rows = db
+      .prepare('SELECT * FROM sync_outbox WHERE seq > ? ORDER BY seq ASC LIMIT ?')
+      .all(afterSeq, safeLimit) as OutboxRow[];
+    return rows.map(mapOutboxRow);
+  }
+
+  /**
+   * Reports whether an outbox sequence number was inserted by this adapter instance.
+   */
+  isOwnOutboxSeq(seq: number): boolean {
+    return this.ownOutboxSeqs.has(seq);
+  }
+
+  /**
+   * Releases tracked in-process outbox sequence numbers up to and including seq.
+   */
+  pruneOwnOutboxSeqsUpTo(seq: number): void {
+    for (const tracked of this.ownOutboxSeqs) {
+      if (tracked <= seq) {
+        this.ownOutboxSeqs.delete(tracked);
+      }
+    }
   }
 
   async listUnsyncedOutbox(boardId: string): Promise<SyncOutboxEntry[]> {

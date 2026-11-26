@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { InMemoryStorageAdapter } from '../storage/InMemoryStorageAdapter.js';
 import { SqliteStorageAdapter } from '../storage/SqliteStorageAdapter.js';
@@ -177,5 +180,70 @@ describe.each([
 
     await adapter.markOutboxSynced([entry.seq], NOW);
     expect(await adapter.listUnsyncedOutbox('board-1')).toHaveLength(0);
+  });
+});
+
+describe('SqliteStorageAdapter external change observation', () => {
+  let tempDir: string;
+  let dbPath: string;
+  let reader: SqliteStorageAdapter;
+  let writer: SqliteStorageAdapter;
+
+  beforeEach(async () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'ariadeck-sqlite-watch-'));
+    dbPath = join(tempDir, 'ariadeck.db');
+    reader = new SqliteStorageAdapter(dbPath);
+    writer = new SqliteStorageAdapter(dbPath);
+    await reader.initialize();
+    await writer.initialize();
+  });
+
+  afterEach(async () => {
+    await writer.close();
+    await reader.close();
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('detects commits from another connection via data_version and distinguishes own vs external outbox rows', async () => {
+    const initialVersion = reader.getDataVersion();
+    expect(reader.getLatestOutboxSeq()).toBe(0);
+
+    // Local write on reader does not increment reader's PRAGMA data_version
+    const ownEntry = await reader.appendOutbox({
+      entityType: 'board',
+      entityId: 'board-local',
+      boardId: 'board-local',
+      operation: 'create',
+      payloadJson: '{"id":"board-local","updatedByDeviceId":"ariadeck-http-client"}',
+      createdAt: NOW,
+      syncedAt: null,
+    });
+    expect(reader.getDataVersion()).toBe(initialVersion);
+    expect(reader.isOwnOutboxSeq(ownEntry.seq)).toBe(true);
+
+    // External write on a separate connection increments reader's PRAGMA data_version
+    const externalEntry = await writer.appendOutbox({
+      entityType: 'card',
+      entityId: 'card-ext',
+      boardId: 'board-local',
+      operation: 'create',
+      payloadJson: '{"id":"card-ext","updatedByDeviceId":"ariadeck-mcp-server"}',
+      createdAt: NOW,
+      syncedAt: null,
+    });
+
+    expect(reader.getDataVersion()).not.toBe(initialVersion);
+    expect(reader.getLatestOutboxSeq()).toBe(externalEntry.seq);
+    expect(reader.isOwnOutboxSeq(externalEntry.seq)).toBe(false);
+
+    const sinceZero = reader.listOutboxSince(0);
+    expect(sinceZero.map((e) => e.seq)).toEqual([ownEntry.seq, externalEntry.seq]);
+
+    const sinceOwn = reader.listOutboxSince(ownEntry.seq);
+    expect(sinceOwn).toHaveLength(1);
+    expect(sinceOwn[0]?.entityId).toBe('card-ext');
+
+    reader.pruneOwnOutboxSeqsUpTo(ownEntry.seq);
+    expect(reader.isOwnOutboxSeq(ownEntry.seq)).toBe(false);
   });
 });
